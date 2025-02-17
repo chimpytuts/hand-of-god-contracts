@@ -316,12 +316,20 @@ contract HogGenesisRewardPool is ReentrancyGuard {
         operator = _operator;
     }
 
-    function governanceRecoverUnsupported(IERC20 _token, uint256 amount, address to) external onlyOperator {
-        uint256 length = poolInfo.length;
-        for (uint256 pid = 0; pid < length; ++pid) {
-            PoolInfo storage pool = poolInfo[pid];
-            require(_token != pool.token, "ShareRewardPool: Token cannot be pool token");
+    function governanceRecoverUnsupported(
+        IERC20 _token,
+        uint256 amount,
+        address to
+    ) external onlyOperator {
+        if (block.timestamp < poolEndTime + 7 days) {
+            // do not allow to drain tokens if less than 7 days after pool ends
+            uint256 length = poolInfo.length;
+            for (uint256 pid = 0; pid < length; ++pid) {
+                PoolInfo storage pool = poolInfo[pid];
+                require(_token != pool.token, "token cannot be pool token");
+            }
         }
+        
         _token.safeTransfer(to, amount);
     }
 }
