@@ -7,7 +7,7 @@ import "@openzeppelin/contracts/token/ERC20/extensions/ERC20Burnable.sol";
 
 import "./owner/Operator.sol";
 
-contract GSNAKE is ERC20Burnable, Operator {
+contract GHOG is ERC20Burnable, Operator {
     using SafeMath for uint256;
 
     uint256 public constant REWARD_POOL_ALLOCATION = 60000 ether;
@@ -23,8 +23,8 @@ contract GSNAKE is ERC20Burnable, Operator {
     address public devFund;
     uint256 public devFundLastClaimed;
 
-    constructor(uint256 _startTime, address _devFund) ERC20("GSNAKE", "GSNAKE") {
-        _mint(msg.sender, 10 ether); // mint 10 Gsnake for initial pools deployment
+    constructor(uint256 _startTime, address _devFund) ERC20("GHOG", "GHOG") {
+        _mint(msg.sender, 10 ether); // mint 10 GHOG for initial pools deployment
 
         startTime = _startTime;
         endTime = startTime + VESTING_DURATION;
