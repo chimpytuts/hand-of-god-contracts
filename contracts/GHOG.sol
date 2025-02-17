@@ -15,7 +15,7 @@ contract GHOG is ERC20Burnable, Operator {
 
     bool public rewardsDistributed = false;
 
-    uint256 public constant VESTING_DURATION = 730 days;
+    uint256 public constant VESTING_DURATION = 370 days;
     uint256 public startTime;
     uint256 public endTime;
 

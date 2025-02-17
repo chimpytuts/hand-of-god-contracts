@@ -1,7 +1,6 @@
 // SPDX-License-Identifier: BUSL-1.1
 
-// GHogRewardPool --> visit https://hog.finance/ for full experience
-// Made by Kell
+// Made by CodeStag Labs
 
 pragma solidity ^0.8.0;
 
@@ -53,7 +52,7 @@ contract GHogRewardPool is ReentrancyGuard {
 
     // The time when GHOG mining ends.
     uint256 public poolEndTime;
-    uint256 public sharePerSecond = 0.00186122 ether; // 59500 tshare / (370 days * 24h * 60min * 60s);
+    uint256 public sharePerSecond = 0.00186122 ether;
     uint256 public runningTime = 370 days;
 
     // Track historical emission rates
