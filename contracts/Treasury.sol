@@ -1,5 +1,7 @@
 // SPDX-License-Identifier: MIT
 
+// Made by CodeStag Labs
+
 pragma solidity ^0.8.0;
 
 import "@openzeppelin/contracts/utils/math/Math.sol";
@@ -248,9 +250,6 @@ contract Treasury is ContractGuard, Operator {
         maxSupplyContractionPercent = 10000; // Upto 10.0% supply for contraction (to burn HOG and mint bhog)
         maxDebtRatioPercent = 35000; // Upto 35% supply of bhog to purchase
 
-        premiumThreshold = 1100;
-        premiumPercent = 70000;
-
         // set seigniorageSaved to it's balance
         seigniorageSaved = IERC20(hog).balanceOf(address(this));
 
@@ -277,11 +276,6 @@ contract Treasury is ContractGuard, Operator {
     function setHogPriceCeiling(uint256 _hogPriceCeiling) external onlyOperator {
         require(_hogPriceCeiling >= hogPriceOne && _hogPriceCeiling <= hogPriceOne.mul(120).div(100), "out of range"); // [$1.0, $1.2]
         hogPriceCeiling = _hogPriceCeiling;
-    }
-
-    function setMaxSupplyExpansionPercents(uint256 _maxSupplyExpansionPercent) external onlyOperator {
-        require(_maxSupplyExpansionPercent >= 10 && _maxSupplyExpansionPercent <= 10000, "_maxSupplyExpansionPercent: out of range"); // [0.01%, 10%]
-        maxSupplyExpansionPercent = _maxSupplyExpansionPercent;
     }
 
     function setBondDepletionFloorPercent(uint256 _bondDepletionFloorPercent) external onlyOperator {
@@ -353,6 +347,11 @@ contract Treasury is ContractGuard, Operator {
         mintingFactorForPayingDebt = _mintingFactorForPayingDebt;
     }
 
+// Example values and explanations for emission rate:
+// _newRate = 150     -> 0.15% expansion rate (higher = more tokens minted)
+// _newRate = 1000    -> 1% expansion rate
+// _newRate = 5000    -> 5% expansion rate
+// Note: Rate is in BASIS_POINTS where 10000 = 10%
     function setExpansionRate(uint256 _newRate) external onlyOperator {
         require(_newRate >= 10 && _newRate <= 10000, "_newRate: out of range"); // [0.01%, 10%]
         
@@ -364,6 +363,26 @@ contract Treasury is ContractGuard, Operator {
         );
         
         maxSupplyExpansionPercent = _newRate;
+    }
+
+
+    // Example values and explanations for bond parameters:
+    // _premiumThreshold = 1100    -> Bond redemption starts when price > $1.10 (110%)
+    // _premiumPercent = 70000     -> 70% premium on bond redemption (higher = more reward for bondholders)
+    // _discountPercent = 10000    -> 10% discount when buying bonds (higher = cheaper bonds)
+    function setBondParameters(
+        uint256 _premiumThreshold,
+        uint256 _premiumPercent,
+        uint256 _discountPercent
+    ) external onlyOperator {
+        require(_premiumThreshold >= hogPriceCeiling, "_premiumThreshold exceeds hogPriceCeiling");
+        require(_premiumThreshold <= 1500, "_premiumThreshold is higher than 1.5");
+        require(_premiumPercent <= 200000, "_premiumPercent is over 200%");
+        require(_discountPercent <= 200000, "_discountPercent is over 200%");
+        
+        premiumThreshold = _premiumThreshold;
+        premiumPercent = _premiumPercent;
+        discountPercent = _discountPercent;
     }
 
     /* ========== MUTABLE FUNCTIONS ========== */
@@ -469,7 +488,36 @@ contract Treasury is ContractGuard, Operator {
         emit MasonryFunded(block.timestamp, _amount);
     }
 
-    function allocateSeigniorage() external onlyOneBlock checkCondition checkEpoch checkOperator {
+    /**
+     * @notice This function is called each epoch and controlled by AI
+     * @dev AI determines optimal bond parameters and expansion rate based on protocol conditions
+     * 
+     * Parameters set by AI each epoch:
+     * @param _premiumThreshold  Example: 1100 -> Bond redemption starts when price > $1.10 (110%)
+     * @param _premiumPercent    Example: 70000 -> 70% premium on bond redemption
+     * @param _discountPercent   Example: 10000 -> 10% discount when buying bonds
+     * @param _expansionRate     Example: 150 -> 0.15% expansion rate (10000 = 10%)
+     */
+    function allocateSeigniorage(
+        uint256 _premiumThreshold,
+        uint256 _premiumPercent,
+        uint256 _discountPercent,
+        uint256 _expansionRate
+    ) external onlyOneBlock checkCondition checkEpoch checkOperator {
+        // AI-controlled parameters are validated and set at the start of each epoch
+        require(_premiumThreshold >= hogPriceCeiling, "_premiumThreshold exceeds hogPriceCeiling");
+        require(_premiumThreshold <= 1500, "_premiumThreshold is higher than 1.5");
+        require(_premiumPercent <= 200000, "_premiumPercent is over 200%");
+        require(_discountPercent <= 200000, "_discountPercent is over 200%");
+        require(_expansionRate >= 10 && _expansionRate <= 10000, "_expansionRate: out of range"); // [0.01%, 10%]
+        
+        // Set AI-determined parameters for this epoch
+        premiumThreshold = _premiumThreshold;
+        premiumPercent = _premiumPercent;
+        discountPercent = _discountPercent;
+        maxSupplyExpansionPercent = _expansionRate;
+
+        // Regular seigniorage allocation logic continues below
         _updateHogPrice();
         previousEpochHogPrice = getHogPrice();
         uint256 hogSupply = getHogCirculatingSupply().sub(seigniorageSaved);
@@ -520,16 +568,16 @@ contract Treasury is ContractGuard, Operator {
         _token.safeTransfer(_to, _amount);
     }
 
-    function tombSetOperator(address _operator) external onlyOperator {
-        IBasisAsset(tomb).transferOperator(_operator);
+    function hogSetOperator(address _operator) external onlyOperator {
+        IBasisAsset(hog).transferOperator(_operator);
     }
 
-    function tshareSetOperator(address _operator) external onlyOperator {
-        IBasisAsset(tshare).transferOperator(_operator);
+    function ghogSetOperator(address _operator) external onlyOperator {
+        IBasisAsset(ghog).transferOperator(_operator);
     }
 
-    function tbondSetOperator(address _operator) external onlyOperator {
-        IBasisAsset(tbond).transferOperator(_operator);
+    function bhogSetOperator(address _operator) external onlyOperator {
+        IBasisAsset(bhog).transferOperator(_operator);
     }
 
     function masonrySetOperator(address _operator) external onlyOperator {

@@ -55,7 +55,7 @@ contract GHogRewardPool is ReentrancyGuard {
     uint256 public sharePerSecond = 0.00186122 ether;
     uint256 public runningTime = 370 days;
 
-    // Track historical emission rates
+    // Track historical emission rates - Updated by AI every 7 days
     struct EmissionPoint {
         uint256 timestamp;
         uint256 sharePerSecond;
@@ -192,7 +192,8 @@ contract GHogRewardPool is ReentrancyGuard {
         pool.allocPoint = _allocPoint;
     }
 
-    // Add this function to set new emission rate
+    // AI-CONTROLLED: Updates the emission rate every 7 days based on protocol conditions
+    // This function allows the AI to adjust the reward distribution rate
     function setSharePerSecond(uint256 _sharePerSecond) external onlyOperator {
         require(
             block.timestamp >= lastEmissionUpdate + EMISSION_UPDATE_INTERVAL,
@@ -214,7 +215,7 @@ contract GHogRewardPool is ReentrancyGuard {
         massUpdatePools();
     }
 
-    // Modified to handle varying emission rates
+    // Helper function to calculate rewards taking into account AI-controlled varying emission rates
     function getGeneratedReward(uint256 _fromTime, uint256 _toTime) public view returns (uint256) {
         if (_fromTime >= _toTime) return 0;
         
