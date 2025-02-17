@@ -43,14 +43,6 @@ contract ShareWrapper {
     }
 }
 
-/*
-__________                             .___   ___________.__
-\______   \_____     ______  ____    __| _/   \_   _____/|__|  ____  _____     ____    ____   ____
- |    |  _/\__  \   /  ___/_/ __ \  / __ |     |    __)  |  | /    \ \__  \   /    \ _/ ___\_/ __ \
- |    |   \ / __ \_ \___ \ \  ___/ / /_/ |     |     \   |  ||   |  \ / __ \_|   |  \\  \___\  ___/
- |______  /(____  //____  > \___  >\____ |     \___  /   |__||___|  /(____  /|___|  / \___  >\___  >
-        \/      \/      \/      \/      \/         \/             \/      \/      \/      \/     \/
-*/
 contract Masonry is ShareWrapper, ContractGuard, Operator {
     using SafeERC20 for IERC20;
     using Address for address;
@@ -75,7 +67,7 @@ contract Masonry is ShareWrapper, ContractGuard, Operator {
     // flags
     bool public initialized = false;
 
-    IERC20 public snake;
+    IERC20 public hog;
     ITreasury public treasury;
 
     mapping(address => MasonSeat) public masons;
@@ -83,7 +75,6 @@ contract Masonry is ShareWrapper, ContractGuard, Operator {
 
     uint256 public withdrawLockupEpochs;
     uint256 public rewardLockupEpochs;
-    uint256 public claimRewardsBurnEpochs;
 
     /* ========== EVENTS ========== */
 
@@ -118,20 +109,19 @@ contract Masonry is ShareWrapper, ContractGuard, Operator {
     /* ========== GOVERNANCE ========== */
 
     function initialize(
-        IERC20 _snake,
+        IERC20 _hog,
         IERC20 _share,
         ITreasury _treasury
     ) public notInitialized onlyOperator {
-        snake = _snake;
+        hog = _hog;
         share = _share;
         treasury = _treasury;
 
         MasonrySnapshot memory genesisSnapshot = MasonrySnapshot({time : block.number, rewardReceived : 0, rewardPerShare : 0});
         masonryHistory.push(genesisSnapshot);
 
-        withdrawLockupEpochs = 4; // Lock for 4 epochs (24h) before release withdraw
-        rewardLockupEpochs = 2; // Lock for 2 epochs (12h) before release claimReward
-        claimRewardsBurnEpochs = 8; // if the masonUser doesn't claim rewards in 2 days, the rewards will be burned
+        withdrawLockupEpochs = 6; // Lock for 6 epochs (36h) before release withdraw
+        rewardLockupEpochs = 3; // Lock for 3 epochs (18h) before release claimReward
 
         initialized = true;
         emit Initialized(msg.sender, block.number);
@@ -145,12 +135,11 @@ contract Masonry is ShareWrapper, ContractGuard, Operator {
         _renounceOperator();
     }
 
-    function setLockUp(uint256 _withdrawLockupEpochs, uint256 _rewardLockupEpochs, uint256 _claimRewardsBurnEpochs) external onlyOperator {
-        require(_withdrawLockupEpochs >= _rewardLockupEpochs && _withdrawLockupEpochs <= 56 && _claimRewardsBurnEpochs <= 56, "_withdrawLockupEpochs: out of range"); // <= 2 week
-        require(_withdrawLockupEpochs > 0 && _rewardLockupEpochs > 0 && _claimRewardsBurnEpochs > 0, "lockupEpochs must be greater than 0");
+    function setLockUp(uint256 _withdrawLockupEpochs, uint256 _rewardLockupEpochs) external onlyOperator {
+        require(_withdrawLockupEpochs >= _rewardLockupEpochs && _withdrawLockupEpochs <= 56, "_withdrawLockupEpochs: out of range"); // <= 2 week
+        require(_withdrawLockupEpochs > 0 && _rewardLockupEpochs > 0, "lockupEpochs must be greater than 0");
         withdrawLockupEpochs = _withdrawLockupEpochs;
         rewardLockupEpochs = _rewardLockupEpochs;
-        claimRewardsBurnEpochs = _claimRewardsBurnEpochs;
     }
 
     /* ========== VIEW FUNCTIONS ========== */
@@ -181,10 +170,6 @@ contract Masonry is ShareWrapper, ContractGuard, Operator {
         return masons[masonUser].epochTimerStart.add(rewardLockupEpochs) <= treasury.epoch();
     }
 
-    function rewardsWillBeBurned(address masonUser) external view returns (bool) {
-        return masons[masonUser].epochTimerStart.add(claimRewardsBurnEpochs) <= treasury.epoch(); // if the masonUser doesn't claim rewards in 2 weeks, the rewards will be burned
-    }
-
     function epoch() external view returns (uint256) {
         return treasury.epoch();
     }
@@ -193,8 +178,8 @@ contract Masonry is ShareWrapper, ContractGuard, Operator {
         return treasury.nextEpochPoint();
     }
 
-    function getSnakePrice() external view returns (uint256) {
-        return treasury.getSnakePrice();
+    function getHogPrice() external view returns (uint256) {
+        return treasury.getHogPrice();
     }
 
     // =========== Users getters =========== //
@@ -235,17 +220,10 @@ contract Masonry is ShareWrapper, ContractGuard, Operator {
         uint256 reward = masons[msg.sender].rewardEarned;
         if (reward > 0) {
             require(masons[msg.sender].epochTimerStart.add(rewardLockupEpochs) <= treasury.epoch(), "Masonry: still in reward lockup");
-            bool willBurn = masons[msg.sender].epochTimerStart.add(claimRewardsBurnEpochs) <= treasury.epoch();
             masons[msg.sender].epochTimerStart = treasury.epoch(); // reset timer
             masons[msg.sender].rewardEarned = 0;
-
-            if (willBurn) {
-                IBasisAsset(address(snake)).burn(reward);
-                emit RewardPaid(msg.sender, 0);
-            } else {
-                snake.safeTransfer(msg.sender, reward);
-                emit RewardPaid(msg.sender, reward);
-            }
+            hog.safeTransfer(msg.sender, reward);
+            emit RewardPaid(msg.sender, reward);
         }
     }
 
@@ -264,13 +242,13 @@ contract Masonry is ShareWrapper, ContractGuard, Operator {
         });
         masonryHistory.push(newSnapshot);
 
-        snake.safeTransferFrom(msg.sender, address(this), amount);
+        hog.safeTransferFrom(msg.sender, address(this), amount);
         emit RewardAdded(msg.sender, amount);
     }
 
     function governanceRecoverUnsupported(IERC20 _token, uint256 _amount, address _to) external onlyOperator {
         // do not allow to drain core tokens
-        require(address(_token) != address(snake), "snake");
+        require(address(_token) != address(hog), "hog");
         require(address(_token) != address(share), "share");
         _token.safeTransfer(_to, _amount);
     }
