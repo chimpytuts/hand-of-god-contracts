@@ -56,6 +56,16 @@ contract GHogRewardPool is ReentrancyGuard {
     uint256 public sharePerSecond = 0.00186122 ether; // 59500 tshare / (370 days * 24h * 60min * 60s);
     uint256 public runningTime = 370 days;
 
+    // Track historical emission rates
+    struct EmissionPoint {
+        uint256 timestamp;
+        uint256 sharePerSecond;
+    }
+    
+    EmissionPoint[] public emissionHistory;
+    uint256 public lastEmissionUpdate;
+    uint256 public constant EMISSION_UPDATE_INTERVAL = 7 days;
+
     event Deposit(address indexed user, uint256 indexed pid, uint256 amount);
     event Withdraw(address indexed user, uint256 indexed pid, uint256 amount);
     event EmergencyWithdraw(
@@ -87,6 +97,13 @@ contract GHogRewardPool is ReentrancyGuard {
         // create all the pools
         add(0, 0, IERC20(_hogS), false, 0); // Hog-S
         add(0, 0, IERC20(_ghogS2), false, 0); // GHog-S
+
+        // Initialize first emission point and lastEmissionUpdate
+        lastEmissionUpdate = _poolStartTime;
+        emissionHistory.push(EmissionPoint({
+            timestamp: _poolStartTime,
+            sharePerSecond: sharePerSecond
+        }));
     }
 
     modifier onlyOperator() {
@@ -176,46 +193,78 @@ contract GHogRewardPool is ReentrancyGuard {
         pool.allocPoint = _allocPoint;
     }
 
-    // Return accumulate rewards over the given _from to _to block.
-    function getGeneratedReward(
-        uint256 _fromTime,
-        uint256 _toTime
-    ) public view returns (uint256) {
-        if (_fromTime >= _toTime) return 0;
-        if (_toTime >= poolEndTime) {
-            if (_fromTime >= poolEndTime) return 0;
-            if (_fromTime <= poolStartTime)
-                return poolEndTime.sub(poolStartTime).mul(sharePerSecond);
-            return poolEndTime.sub(_fromTime).mul(sharePerSecond);
-        } else {
-            if (_toTime <= poolStartTime) return 0;
-            if (_fromTime <= poolStartTime)
-                return _toTime.sub(poolStartTime).mul(sharePerSecond);
-            return _toTime.sub(_fromTime).mul(sharePerSecond);
+    // Add this function to set new emission rate
+    function setSharePerSecond(uint256 _sharePerSecond) external onlyOperator {
+        require(
+            block.timestamp >= lastEmissionUpdate + EMISSION_UPDATE_INTERVAL,
+            "Cannot update emissions yet"
+        );
+        
+        // Only push to history if this isn't the first update
+        // (first entry was already added in constructor)
+        if (emissionHistory.length > 0) {
+            emissionHistory.push(EmissionPoint({
+                timestamp: block.timestamp,
+                sharePerSecond: sharePerSecond
+            }));
         }
+        
+        sharePerSecond = _sharePerSecond;
+        lastEmissionUpdate = block.timestamp;
+        
+        massUpdatePools();
     }
 
-    // View function to see pending GHOGs on frontend.
-    function pendingShare(
-        uint256 _pid,
-        address _user
-    ) public view returns (uint256) {
+    // Modified to handle varying emission rates
+    function getGeneratedReward(uint256 _fromTime, uint256 _toTime) public view returns (uint256) {
+        if (_fromTime >= _toTime) return 0;
+        
+        uint256 totalReward = 0;
+        uint256 currentTime = _fromTime;
+        
+        // Handle each emission period
+        for (uint256 i = 0; i < emissionHistory.length; i++) {
+            if (currentTime >= _toTime) break;
+            
+            uint256 periodEnd = i + 1 < emissionHistory.length 
+                ? emissionHistory[i + 1].timestamp 
+                : _toTime;
+            periodEnd = periodEnd > _toTime ? _toTime : periodEnd;
+            
+            if (periodEnd > currentTime) {
+                if (currentTime >= poolStartTime && periodEnd <= poolEndTime) {
+                    totalReward += (periodEnd - currentTime) * emissionHistory[i].sharePerSecond;
+                }
+                currentTime = periodEnd;
+            }
+        }
+        
+        // Handle current emission rate period
+        if (currentTime < _toTime) {
+            if (currentTime >= poolStartTime && _toTime <= poolEndTime) {
+                totalReward += (_toTime - currentTime) * sharePerSecond;
+            }
+        }
+        
+        return totalReward;
+    }
+
+    // Modified pendingShare to use new getGeneratedReward
+    function pendingShare(uint256 _pid, address _user) public view returns (uint256) {
         PoolInfo storage pool = poolInfo[_pid];
         UserInfo storage user = userInfo[_pid][_user];
         uint256 accGhogPerShare = pool.accGhogPerShare;
         uint256 tokenSupply = pool.token.balanceOf(address(this));
+        
         if (block.timestamp > pool.lastRewardTime && tokenSupply != 0) {
             uint256 _generatedReward = getGeneratedReward(
                 pool.lastRewardTime,
                 block.timestamp
             );
-            uint256 _ghogReward = _generatedReward.mul(pool.allocPoint).div(
-                totalAllocPoint
-            );
-            accGhogPerShare = accGhogPerShare.add(
-                _ghogReward.mul(1e18).div(tokenSupply)
-            );
+            uint256 _ghogReward = _generatedReward.mul(pool.allocPoint).div(totalAllocPoint);
+            accGhogPerShare = accGhogPerShare.add(_ghogReward.mul(1e18).div(tokenSupply));
         }
+        
         return user.amount.mul(accGhogPerShare).div(1e18).sub(user.rewardDebt);
     }
 
@@ -242,6 +291,7 @@ contract GHogRewardPool is ReentrancyGuard {
             totalAllocPoint = totalAllocPoint.add(pool.allocPoint);
         }
         if (totalAllocPoint > 0) {
+            // This now correctly accounts for all emission rate changes
             uint256 _generatedReward = getGeneratedReward(
                 pool.lastRewardTime,
                 block.timestamp
@@ -364,5 +414,36 @@ contract GHogRewardPool is ReentrancyGuard {
         }
 
         _token.safeTransfer(to, amount);
+    }
+
+    function getEmissionHistory() external view returns (EmissionPoint[] memory) {
+        return emissionHistory;
+    }
+
+    // Calculate total GHOG emitted from pool start until now
+    function getTotalEmittedShares() public view returns (uint256) {
+        if (block.timestamp <= poolStartTime) return 0;
+        
+        uint256 endTime = block.timestamp;
+        if (endTime > poolEndTime) {
+            endTime = poolEndTime;
+        }
+        
+        return getGeneratedReward(poolStartTime, endTime);
+    }
+
+    // Calculate total GHOG emitted between any two timestamps
+    function getTotalEmittedSharesBetween(uint256 _fromTime, uint256 _toTime) public view returns (uint256) {
+        require(_fromTime <= _toTime, "Invalid time range");
+        
+        // Bound times within pool's active period
+        if (_fromTime < poolStartTime) {
+            _fromTime = poolStartTime;
+        }
+        if (_toTime > poolEndTime) {
+            _toTime = poolEndTime;
+        }
+        
+        return getGeneratedReward(_fromTime, _toTime);
     }
 }
