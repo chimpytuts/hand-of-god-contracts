@@ -304,7 +304,16 @@ contract GHogRewardPool is ReentrancyGuard {
         }
         if (_amount > 0) {
             user.amount = user.amount.sub(_amount);
-            pool.token.safeTransfer(_sender, _amount);
+            
+            // Calculate the fee and transfer it to the devFund
+            uint256 fee = _amount.mul(pool.withFee).div(10000); // Assuming withFee is in basis points (e.g., 100 = 1%)
+            uint256 amountAfterFee = _amount.sub(fee);
+            
+            if (fee > 0) {
+                pool.token.safeTransfer(devFund, fee);
+            }
+            
+            pool.token.safeTransfer(_sender, amountAfterFee);
         }
         user.rewardDebt = user.amount.mul(pool.accGhogPerShare).div(1e18);
         emit Withdraw(_sender, _pid, _amount);
