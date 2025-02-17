@@ -153,7 +153,6 @@ contract GHogRewardPool is ReentrancyGuard {
 
         if (_isStarted) {
             totalAllocPoint = totalAllocPoint.add(_allocPoint);
-            sharePerSecond = sharePerSecond.add(_allocPoint);
         }
     }
 
@@ -217,8 +216,7 @@ contract GHogRewardPool is ReentrancyGuard {
                 _ghogReward.mul(1e18).div(tokenSupply)
             );
         }
-        return
-            user.amount.mul(accGhogPerShare).div(1e18).sub(user.rewardDebt);
+        return user.amount.mul(accGhogPerShare).div(1e18).sub(user.rewardDebt);
     }
 
     function massUpdatePools() public {
@@ -257,7 +255,7 @@ contract GHogRewardPool is ReentrancyGuard {
         }
         pool.lastRewardTime = block.timestamp;
     }
- 
+
     // Deposit LP tokens.
     function deposit(uint256 _pid, uint256 _amount) public nonReentrant {
         address _sender = msg.sender;
@@ -284,35 +282,30 @@ contract GHogRewardPool is ReentrancyGuard {
     }
 
     // Withdraw LP tokens.
-    function withdraw(
-        uint256 _pid,
-        uint256 _amount
-    ) public nonReentrant {
+    function withdraw(uint256 _pid, uint256 _amount) public nonReentrant {
         address _sender = msg.sender;
         PoolInfo storage pool = poolInfo[_pid];
         UserInfo storage user = userInfo[_pid][_sender];
         require(user.amount >= _amount, "withdraw: not good");
         updatePool(_pid);
-        uint256 _pending = user
-            .amount
-            .mul(pool.accGhogPerShare)
-            .div(1e18)
-            .sub(user.rewardDebt);
+        uint256 _pending = user.amount.mul(pool.accGhogPerShare).div(1e18).sub(
+            user.rewardDebt
+        );
         if (_pending > 0) {
             safeGhogTransfer(_sender, _pending);
             emit RewardPaid(_sender, _pending);
         }
         if (_amount > 0) {
             user.amount = user.amount.sub(_amount);
-            
+
             // Calculate the fee and transfer it to the devFund
             uint256 fee = _amount.mul(pool.withFee).div(10000); // Assuming withFee is in basis points (e.g., 100 = 1%)
             uint256 amountAfterFee = _amount.sub(fee);
-            
+
             if (fee > 0) {
                 pool.token.safeTransfer(devFund, fee);
             }
-            
+
             pool.token.safeTransfer(_sender, amountAfterFee);
         }
         user.rewardDebt = user.amount.mul(pool.accGhogPerShare).div(1e18);
