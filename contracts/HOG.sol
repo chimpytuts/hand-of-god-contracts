@@ -9,45 +9,45 @@ import "./lib/SafeMath8.sol";
 import "./owner/Operator.sol";
 import "./interfaces/IOracle.sol";
 
-contract SNAKE is ERC20Burnable, Operator {
+contract HOG is ERC20Burnable, Operator {
     using SafeMath8 for uint8;
     using SafeMath for uint256;
 
-    uint256 public constant INITIAL_DAOFUND_DISTRIBUTION = 1000 ether; // 1000 SNAKE
-    uint256 public constant GENESIS_DISTRIBUTION = 469000 ether; // 450k SNAKE
+    uint256 public constant INITIAL_DAOFUND_DISTRIBUTION = 1000 ether; // 1000 HOG
+    uint256 public constant GENESIS_DISTRIBUTION = 469000 ether; // 450k HOG
 
     bool public rewardsDistributed = false;
 
 
     // Address of the Oracle
-    address public snakeOracle;
+    address public hogOracle;
 
     /**
-     * @notice Constructs the SNAKE ERC-20 contract.
+     * @notice Constructs the HOG ERC-20 contract.
      */
-    constructor() ERC20("SNAKE", "SNAKE") {
-        // Mints 200 SNAKE to contract creator for initial pool setup
+    constructor() ERC20("HOG", "HOG") {
+        // Mints 200 HOG to contract creator for initial pool setup
 
         _mint(msg.sender, 200 ether);
     }
 
-    function _getSnakePrice() internal view returns (uint256 _snakePrice) {
-        try IOracle(snakeOracle).consult(address(this), 1e18) returns (uint256 _price) {
+    function _getHogPrice() internal view returns (uint256 _hogPrice) {
+        try IOracle(hogOracle).consult(address(this), 1e18) returns (uint256 _price) {
             return uint256(_price);
         } catch {
-            revert("Snake: failed to fetch SNAKE price from Oracle");
+            revert("Hog: failed to fetch HOG price from Oracle");
         }
     }
 
-    function setSnakeOracle(address _snakeOracle) public onlyOperator {
-        require(_snakeOracle != address(0), "oracle address cannot be 0 address");
-        snakeOracle = _snakeOracle;
+    function setHogOracle(address _hogOracle) public onlyOperator {
+        require(_hogOracle != address(0), "oracle address cannot be 0 address");
+        hogOracle = _hogOracle;
     }
 
     /**
-     * @notice Operator mints SNAKE to a recipient
+     * @notice Operator mints HOG to a recipient
      * @param recipient_ The address of recipient
-     * @param amount_ The amount of SNAKE to mint to
+     * @param amount_ The amount of HOG to mint to
      * @return whether the process has been done
      */
     function mint(address recipient_, uint256 amount_) public onlyOperator returns (bool) {
