@@ -55,18 +55,11 @@ contract Treasury is ContractGuard, Operator {
 
     uint256 public seigniorageSaved;
 
-    uint256[] public supplyTiers;
-    uint256[] public maxExpansionTiers;
-
     uint256 public maxSupplyExpansionPercent;
     uint256 public bondDepletionFloorPercent;
     uint256 public seigniorageExpansionFloorPercent;
     uint256 public maxSupplyContractionPercent;
     uint256 public maxDebtRatioPercent;
-
-    // 14 first epochs (0.5 week) with 4.5% expansion regardless of HOG price
-    uint256 public bootstrapEpochs;
-    uint256 public bootstrapSupplyExpansionPercent;
 
     /* =================== Added variables =================== */
     uint256 public previousEpochHogPrice;
@@ -248,10 +241,6 @@ contract Treasury is ContractGuard, Operator {
         // hogPriceCeiling = 1000300000000000000; // 1.003 as its stable pool
         hogPriceCeiling = hogPriceOne.mul(101).div(100); // even if its stable we aim to get 1.01
 
-        // Dynamic max expansion percent
-        supplyTiers = [0 ether, 600000 ether, 750000 ether, 1000000 ether, 1200000 ether, 1500000 ether, 2000000 ether];
-        maxExpansionTiers = [110, 90, 80, 70, 60, 50, 20]; // 0.11%, 0.09%, 0.08%, 0.07%, 0.06%, 0.05%, 0.02%
-
         maxSupplyExpansionPercent = 150; // 0.15%
 
         bondDepletionFloorPercent = 100000; // 100% of Bond supply for depletion floor
@@ -261,10 +250,6 @@ contract Treasury is ContractGuard, Operator {
 
         premiumThreshold = 1100;
         premiumPercent = 70000;
-
-        // First 12 epochs with 1.5% expansion
-        bootstrapEpochs = 12;
-        bootstrapSupplyExpansionPercent = 150; // 0.15%
 
         // set seigniorageSaved to it's balance
         seigniorageSaved = IERC20(hog).balanceOf(address(this));
@@ -298,27 +283,6 @@ contract Treasury is ContractGuard, Operator {
         require(_maxSupplyExpansionPercent >= 10 && _maxSupplyExpansionPercent <= 10000, "_maxSupplyExpansionPercent: out of range"); // [0.01%, 10%]
         maxSupplyExpansionPercent = _maxSupplyExpansionPercent;
     }
-    // =================== ALTER THE NUMBERS IN LOGIC!!!! =================== //
-    function setSupplyTiersEntry(uint8 _index, uint256 _value) external onlyOperator returns (bool) {
-        require(_index >= 0, "Index has to be higher than 0");
-        require(_index < 7, "Index has to be lower than count of tiers");
-        if (_index > 0) {
-            require(_value > supplyTiers[_index - 1]);
-        }
-        if (_index < 6) {
-            require(_value < supplyTiers[_index + 1]);
-        }
-        supplyTiers[_index] = _value;
-        return true;
-    }
-
-    function setMaxExpansionTiersEntry(uint8 _index, uint256 _value) external onlyOperator returns (bool) {
-        require(_index >= 0, "Index has to be higher than 0");
-        require(_index < 7, "Index has to be lower than count of tiers");
-        require(_value >= 10 && _value <= 10000, "_value: out of range"); // [0.01%, 10%]
-        maxExpansionTiers[_index] = _value;
-        return true;
-    }
 
     function setBondDepletionFloorPercent(uint256 _bondDepletionFloorPercent) external onlyOperator {
         require(_bondDepletionFloorPercent >= 500 && _bondDepletionFloorPercent <= BASIS_DIVISOR, "out of range"); // [0.5%, 100%]
@@ -335,13 +299,6 @@ contract Treasury is ContractGuard, Operator {
         maxDebtRatioPercent = _maxDebtRatioPercent;
     }
 
-    function setBootstrap(uint256 _bootstrapEpochs, uint256 _bootstrapSupplyExpansionPercent) external onlyOperator {
-        require(_bootstrapEpochs <= 120, "_bootstrapEpochs: out of range"); // <= 1 month
-        require(_bootstrapSupplyExpansionPercent >= 100 && _bootstrapSupplyExpansionPercent <= 10000, "_bootstrapSupplyExpansionPercent: out of range"); // [0.1%, 10%]
-        bootstrapEpochs = _bootstrapEpochs;
-        bootstrapSupplyExpansionPercent = _bootstrapSupplyExpansionPercent;
-    }
-    //======================================================================
     function setExtraFunds(
         address _daoFund,
         uint256 _daoFundSharedPercent,
@@ -394,6 +351,19 @@ contract Treasury is ContractGuard, Operator {
     function setMintingFactorForPayingDebt(uint256 _mintingFactorForPayingDebt) external onlyOperator {
         require(_mintingFactorForPayingDebt >= BASIS_DIVISOR && _mintingFactorForPayingDebt <= 200000, "_mintingFactorForPayingDebt: out of range"); // [100%, 200%]
         mintingFactorForPayingDebt = _mintingFactorForPayingDebt;
+    }
+
+    function setExpansionRate(uint256 _newRate) external onlyOperator {
+        require(_newRate >= 10 && _newRate <= 10000, "_newRate: out of range"); // [0.01%, 10%]
+        
+        // Optional: Add a max change per epoch to prevent dramatic shifts
+        require(
+            _newRate <= maxSupplyExpansionPercent.mul(2) && 
+            _newRate >= maxSupplyExpansionPercent.div(2),
+            "Rate change too dramatic"
+        );
+        
+        maxSupplyExpansionPercent = _newRate;
     }
 
     /* ========== MUTABLE FUNCTIONS ========== */
@@ -499,58 +469,44 @@ contract Treasury is ContractGuard, Operator {
         emit MasonryFunded(block.timestamp, _amount);
     }
 
-    function _calculateMaxSupplyExpansionPercent(uint256 _hogSupply) internal returns (uint256) {
-        for (uint8 tierId = 6; tierId >= 0; --tierId) {
-            if (_hogSupply >= supplyTiers[tierId]) {
-                maxSupplyExpansionPercent = maxExpansionTiers[tierId];
-                break;
-            }
-        }
-        return maxSupplyExpansionPercent;
-    }
-
     function allocateSeigniorage() external onlyOneBlock checkCondition checkEpoch checkOperator {
         _updateHogPrice();
         previousEpochHogPrice = getHogPrice();
         uint256 hogSupply = getHogCirculatingSupply().sub(seigniorageSaved);
-        if (epoch < bootstrapEpochs) {
-            // 14 first epochs with 6% expansion
-            _sendToMasonry(hogSupply.mul(bootstrapSupplyExpansionPercent).div(BASIS_DIVISOR));
-        } else {
-            if (previousEpochHogPrice > hogPriceCeiling) {
-                // Expansion ($HOG Price > 1 $FTM): there is some seigniorage to be allocated
-                uint256 bondSupply = IERC20(bhog).totalSupply();
-                uint256 _percentage = previousEpochHogPrice.sub(hogPriceOne);
-                uint256 _savedForBond;
-                uint256 _savedForMasonry;
-                uint256 _mse = _calculateMaxSupplyExpansionPercent(hogSupply).mul(1e13);
-                if (_percentage > _mse) {
-                    _percentage = _mse;
+        
+        if (previousEpochHogPrice > hogPriceCeiling) {
+            uint256 bondSupply = IERC20(bhog).totalSupply();
+            uint256 _percentage = previousEpochHogPrice.sub(hogPriceOne);
+            uint256 _savedForBond;
+            uint256 _savedForMasonry;
+            
+            uint256 _mse = maxSupplyExpansionPercent.mul(1e13);
+            
+            if (_percentage > _mse) {
+                _percentage = _mse;
+            }
+            if (seigniorageSaved >= bondSupply.mul(bondDepletionFloorPercent).div(BASIS_DIVISOR)) {
+                // saved enough to pay debt, mint as usual rate
+                _savedForMasonry = hogSupply.mul(_percentage).div(1e18);
+            } else {
+                // have not saved enough to pay debt, mint more
+                uint256 _seigniorage = hogSupply.mul(_percentage).div(1e18);
+                _savedForMasonry = _seigniorage.mul(seigniorageExpansionFloorPercent).div(BASIS_DIVISOR);
+                _savedForBond = _seigniorage.sub(_savedForMasonry);
+                if (mintingFactorForPayingDebt > 0) {
+                    _savedForBond = _savedForBond.mul(mintingFactorForPayingDebt).div(BASIS_DIVISOR);
                 }
-                if (seigniorageSaved >= bondSupply.mul(bondDepletionFloorPercent).div(BASIS_DIVISOR)) {
-                    // saved enough to pay debt, mint as usual rate
-                    _savedForMasonry = hogSupply.mul(_percentage).div(1e18);
-                } else {
-                    // have not saved enough to pay debt, mint more
-                    uint256 _seigniorage = hogSupply.mul(_percentage).div(1e18);
-                    _savedForMasonry = _seigniorage.mul(seigniorageExpansionFloorPercent).div(BASIS_DIVISOR);
-                    _savedForBond = _seigniorage.sub(_savedForMasonry);
-                    if (mintingFactorForPayingDebt > 0) {
-                        _savedForBond = _savedForBond.mul(mintingFactorForPayingDebt).div(BASIS_DIVISOR);
-                    }
-                }
-                if (_savedForMasonry > 0) {
-                    _sendToMasonry(_savedForMasonry);
-                }
-                if (_savedForBond > 0) {
-                    seigniorageSaved = seigniorageSaved.add(_savedForBond);
-                    IBasisAsset(hog).mint(address(this), _savedForBond);
-                    emit TreasuryFunded(block.timestamp, _savedForBond);
-                }
+            }
+            if (_savedForMasonry > 0) {
+                _sendToMasonry(_savedForMasonry);
+            }
+            if (_savedForBond > 0) {
+                seigniorageSaved = seigniorageSaved.add(_savedForBond);
+                IBasisAsset(hog).mint(address(this), _savedForBond);
+                emit TreasuryFunded(block.timestamp, _savedForBond);
             }
         }
     }
-    //===================================================================================================================================
 
     function governanceRecoverUnsupported(
         IERC20 _token,
