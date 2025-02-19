@@ -7,7 +7,7 @@ interface ITreasury {
 
     function nextEpochPoint() external view returns (uint256);
 
-    function getSnakePrice() external view returns (uint256);
+    function getHogPrice() external view returns (uint256);
 
     function buyBonds(uint256 amount, uint256 targetPrice) external;
 

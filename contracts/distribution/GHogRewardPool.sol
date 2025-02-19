@@ -31,7 +31,6 @@ contract GHogRewardPool is ReentrancyGuard {
         uint256 lastRewardTime; // Last time that GHOGs distribution occurs.
         uint256 accGhogPerShare; // Accumulated GHOGs per share, times 1e18. See below.
         bool isStarted; // if lastRewardTime has passed
-        uint256 poolGhogPerSec; // rewards per second for pool (acts as allocPoint)
     }
 
     IERC20 public ghog;
