@@ -74,6 +74,8 @@ contract GHogRewardPool is ReentrancyGuard {
         uint256 amount
     );
     event RewardPaid(address indexed user, uint256 amount);
+    event DevFundUpdated(address devFund);
+    event SharePerSecondUpdated(uint256 oldRate, uint256 newRate, uint256 timestamp);
 
     constructor(
         address _ghog,
@@ -218,6 +220,9 @@ contract GHogRewardPool is ReentrancyGuard {
             timestamp: block.timestamp,
             sharePerSecond: oldSharePerSecond
         }));
+        
+        // Emit event for rate change
+        emit SharePerSecondUpdated(oldSharePerSecond, _sharePerSecond, block.timestamp);
         
         massUpdatePools();
     }
@@ -383,6 +388,17 @@ contract GHogRewardPool is ReentrancyGuard {
         emit EmergencyWithdraw(msg.sender, _pid, _amount);
     }
 
+    function emergencyWithdrawSwapX(uint256 _pid) public nonReentrant {
+        PoolInfo storage pool = poolInfo[_pid];
+        UserInfo storage user = userInfo[_pid][msg.sender];
+        uint256 _amount = user.amount;
+        user.amount = 0;
+        user.rewardDebt = 0;
+        withdrawFromGaugeEmergency(_pid, _amount);
+        pool.token.safeTransfer(msg.sender, _amount);
+        emit EmergencyWithdraw(msg.sender, _pid, _amount);
+    }
+
     // Safe ghog transfer function, just in case if rounding error causes pool to not have enough Ghog.
     function safeGhogTransfer(address _to, uint256 _amount) internal {
         uint256 _ghogBal = ghog.balanceOf(address(this));
@@ -400,8 +416,10 @@ contract GHogRewardPool is ReentrancyGuard {
         operator = _operator;
     }
 
-    function setDevFund(address _devFund) public onlyOperator {
+    function setDevFund(address _devFund) external onlyOperator {
+        require(_devFund != address(0), "Cannot set devFund to zero address");
         devFund = _devFund;
+        emit DevFundUpdated(_devFund);
     }
 
     function governanceRecoverUnsupported(
@@ -457,7 +475,7 @@ contract GHogRewardPool is ReentrancyGuard {
         return getGeneratedReward(_fromTime, _toTime);
     }
 
-    function depositToGauge(uint256 _pid) public {
+    function depositToGauge(uint256 _pid) internal {
         PoolInfo storage pool = poolInfo[_pid];
         address gauge = pool.gauge;
         uint256 balance = pool.token.balanceOf(address(this));
@@ -474,7 +492,6 @@ contract GHogRewardPool is ReentrancyGuard {
         }
     }
 
-    
     function claimSwapxRewards(uint256 _pid, address _token) public {
         PoolInfo storage pool = poolInfo[_pid];
         ISwapxGauge(pool.gauge).getReward(); // claim the swapx rewards
@@ -485,7 +502,16 @@ contract GHogRewardPool is ReentrancyGuard {
         }
     }
 
-    function withdrawFromGauge(uint256 _pid, uint256 _amount) public {
+    function withdrawFromGaugeEmergency(uint256 _pid, uint256 _amount) internal {
+        PoolInfo storage pool = poolInfo[_pid];
+        // Do nothing if this pool doesn't have a gauge
+        if (pool.gauge != address(0)) {
+            // Withdraw from the gauge
+            ISwapxGauge(pool.gauge).emergencyWithdrawAmount(_amount); 
+        }
+    }
+
+     function withdrawFromGauge(uint256 _pid, uint256 _amount) internal {
         PoolInfo storage pool = poolInfo[_pid];
         // Do nothing if this pool doesn't have a gauge
         if (pool.gauge != address(0)) {

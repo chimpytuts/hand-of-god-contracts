@@ -15,5 +15,5 @@ interface ISwapxGauge {
     function isForPair() external view returns (bool);
     function totalSupply() external view returns (uint);
     function earned(address token, address account) external view returns (uint);
-    
+    function emergencyWithdrawAmount(uint256 _amount) external;
 }
