@@ -259,7 +259,7 @@ contract GHogRewardPool is ReentrancyGuard {
         PoolInfo storage pool = poolInfo[_pid];
         UserInfo storage user = userInfo[_pid][_user];
         uint256 accGhogPerShare = pool.accGhogPerShare;
-        uint256 tokenSupply = pool.token.balanceOf(address(this));
+        uint256 tokenSupply = pool.gauge != address(0) ? ISwapxGauge(pool.gauge).balanceOf(address(this)) : pool.token.balanceOf(address(this));
         
         if (block.timestamp > pool.lastRewardTime && tokenSupply != 0) {
             uint256 _generatedReward = getGeneratedReward(
@@ -287,7 +287,7 @@ contract GHogRewardPool is ReentrancyGuard {
         if (block.timestamp <= pool.lastRewardTime) {
             return;
         }
-        uint256 tokenSupply = pool.token.balanceOf(address(this));
+        uint256 tokenSupply = pool.gauge != address(0) ? ISwapxGauge(pool.gauge).balanceOf(address(this)) : pool.token.balanceOf(address(this));
         if (tokenSupply == 0) {
             pool.lastRewardTime = block.timestamp;
             return;
