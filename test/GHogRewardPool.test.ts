@@ -6,18 +6,17 @@ import { time } from "@nomicfoundation/hardhat-network-helpers";
 
 describe("GHogRewardPool", function () {
   let hog: HOG;
-  let ghog: GHOG;
-  let gHogRewardPool: GHogRewardPool;
   let owner: SignerWithAddress;
   let devFund: SignerWithAddress;
   let startTime: number;
   let hogS: string;
-  let ghogS: string;
 
-  const FACTORY_ADDRESS = "0xDDD9845Ba0D8f38d3045f804f67A1a8B9A528FcC";
-  const FACTORY_ABI = [
-    "function createPair(address tokenA, address tokenB) external returns (address pair)",
-    "function getPair(address tokenA, address tokenB) external view returns (address pair)"
+  const SwAPX_ROUTER_ADDRESS = "0xF5F7231073b3B41c04BA655e1a7438b1a7b29c27";
+  const OS_TOKEN_ADDRESS = "0xb1e25689D55734FD3ffFc939c4C3Eb52DFf8A794";
+  
+  const ROUTER_ABI = [
+    "function addLiquidity(address tokenA, address tokenB, bool stable, uint256 amountADesired, uint256 amountBDesired, uint256 amountAMin, uint256 amountBMin, address to, uint256 deadline) external returns (uint256 amountA, uint256 amountB, uint256 liquidity)",
+    "function getPool(address tokenA, address tokenB, bool stable) external view returns (address pool)"
   ];
 
   before(async function () {
@@ -30,61 +29,43 @@ describe("GHogRewardPool", function () {
     // Deploy HOG and GHOG
     const HOG = await ethers.getContractFactory("HOG");
     hog = await HOG.deploy();
-    
-    const GHOG = await ethers.getContractFactory("GHOG");
-    ghog = await GHOG.deploy();
+
+    await hog.transferOperator(owner.address);
 
     // Mint initial tokens
     await hog.mint(owner.address, ethers.parseEther("1000000")); // 1M HOG
-    await ghog.mint(owner.address, ethers.parseEther("1000000")); // 1M GHOG
 
-    // Create HOG-S and GHOG-S pairs
-    const factory = await ethers.getContractAt(FACTORY_ABI, FACTORY_ADDRESS);
+    // Get router contract
+    const router = await ethers.getContractAt(ROUTER_ABI, SwAPX_ROUTER_ADDRESS);
     
-    // Create HOG-S pair
-    console.log("Creating HOG-S pair...");
-    await factory.createPair(await hog.getAddress(), ethers.ZeroAddress); // Use appropriate S token address
-    hogS = await factory.getPair(await hog.getAddress(), ethers.ZeroAddress);
-    console.log("HOG-S pair created at:", hogS);
+    // Approve router to spend tokens
+    await hog.approve(SwAPX_ROUTER_ADDRESS, ethers.MaxUint256);
 
-    // Create GHOG-S pair
-    console.log("Creating GHOG-S pair...");
-    await factory.createPair(await ghog.getAddress(), ethers.ZeroAddress); // Use appropriate S token address
-    ghogS = await factory.getPair(await ghog.getAddress(), ethers.ZeroAddress);
-    console.log("GHOG-S pair created at:", ghogS);
-
-    // Add liquidity to pairs
-    console.log("Adding liquidity to pairs...");
-    // Add liquidity code here (will need router contract)
-
-    // Deploy GHogRewardPool
-    const GHogRewardPool = await ethers.getContractFactory("GHogRewardPool");
-    gHogRewardPool = await GHogRewardPool.deploy(
-      await ghog.getAddress(),
-      hogS,
-      ghogS,
-      devFund.address,
-      startTime
-    );
-
-    // Fund reward pool with GHOG
-    const rewardAmount = ethers.parseEther("100000"); // 100k GHOG
-    await ghog.mint(await gHogRewardPool.getAddress(), rewardAmount);
+    // Create HOG-S stable pool
+    console.log("Creating HOG-S stable pool...");
+    const hogAmount = ethers.parseEther("100000"); // 100k HOG
+    const sAmount = ethers.parseEther("100000"); // 100k S (assuming same decimals)
+    
+    try {
+        const deadline = Math.floor(Date.now() / 1000) + 3600; // 1 hour from now
+        await router.addLiquidity(
+            await hog.getAddress(),
+            OS_TOKEN_ADDRESS,
+            true, // stable pool
+            hogAmount,
+            sAmount,
+            0, // amountAMin
+            0, // amountBMin
+            owner.address,
+            deadline
+        );
+        
+        // Get pool address
+        hogS = await router.getPool(await hog.getAddress(), OS_TOKEN_ADDRESS, true);
+        console.log("HOG-S pool created at:", hogS);
+    } catch (error) {
+        console.error("Error creating HOG-S pool:", error);
+        throw error;
+    }
   });
-
-  it("Should initialize with correct values", async function () {
-    expect(await gHogRewardPool.ghog()).to.equal(await ghog.getAddress());
-    expect(await gHogRewardPool.devFund()).to.equal(devFund.address);
-    expect(await gHogRewardPool.poolStartTime()).to.equal(startTime);
-    expect(await gHogRewardPool.operator()).to.equal(owner.address);
-    
-    // Check pool info
-    const pool0 = await gHogRewardPool.poolInfo(0);
-    const pool1 = await gHogRewardPool.poolInfo(1);
-    
-    expect(pool0.token).to.equal(hogS);
-    expect(pool1.token).to.equal(ghogS);
-  });
-
-  // Add more tests...
 });

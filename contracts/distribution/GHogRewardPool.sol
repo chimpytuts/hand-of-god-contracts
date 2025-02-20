@@ -95,8 +95,8 @@ contract GHogRewardPool is ReentrancyGuard {
         devFund = _devFund;
 
         // create all the pools
-        add(0, 0, IERC20(_hogS), false, 0); // Hog-S
-        add(0, 0, IERC20(_ghogS2), false, 0); // GHog-S
+        add(0, 0, IERC20(_hogS), false, 0, address(0)); // Hog-S
+        add(0, 0, IERC20(_ghogS2), false, 0, address(0)); // GHog-S
 
         // Initialize first emission point and lastEmissionUpdate
         lastEmissionUpdate = _poolStartTime;
@@ -488,6 +488,7 @@ contract GHogRewardPool is ReentrancyGuard {
         // Do nothing if this pool doesn't have a gauge
         if (pool.gauge != address(0)) {
             // Withdraw from the gauge
-            ISwapxGauge(pool.gaugeInfo.gauge).withdraw(_amount); 
+            ISwapxGauge(pool.gauge).withdraw(_amount); 
         }
+    }
 }
