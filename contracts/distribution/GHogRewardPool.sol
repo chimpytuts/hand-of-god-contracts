@@ -9,6 +9,7 @@ import "@openzeppelin/contracts/token/ERC20/utils/SafeERC20.sol";
 import "@openzeppelin/contracts/utils/math/SafeMath.sol";
 import "@openzeppelin/contracts/security/ReentrancyGuard.sol";
 import "../interfaces/IBasisAsset.sol";
+import "../interfaces/swapx/ISwapXGauge.sol";
 
 contract GHogRewardPool is ReentrancyGuard {
     using SafeMath for uint256;
@@ -31,6 +32,7 @@ contract GHogRewardPool is ReentrancyGuard {
         uint256 lastRewardTime; // Last time that GHOGs distribution occurs.
         uint256 accGhogPerShare; // Accumulated GHOGs per share, times 1e18. See below.
         bool isStarted; // if lastRewardTime has passed
+        address gauge;
     }
 
     IERC20 public ghog;
@@ -132,7 +134,8 @@ contract GHogRewardPool is ReentrancyGuard {
         uint256 _withFee,
         IERC20 _token,
         bool _withUpdate,
-        uint256 _lastRewardTime
+        uint256 _lastRewardTime,
+        address _gauge
     ) public onlyOperator {
         checkPoolDuplicate(_token);
         if (_withUpdate) {
@@ -162,7 +165,8 @@ contract GHogRewardPool is ReentrancyGuard {
                 allocPoint: _allocPoint,
                 lastRewardTime: _lastRewardTime,
                 accGhogPerShare: 0,
-                isStarted: _isStarted
+                isStarted: _isStarted,
+                gauge: _gauge
             })
         );
 
@@ -175,7 +179,8 @@ contract GHogRewardPool is ReentrancyGuard {
     function set(
         uint256 _pid,
         uint256 _allocPoint,
-        uint256 _withFee
+        uint256 _withFee,
+        address _gauge
     ) public onlyOperator {
         massUpdatePools();
 
@@ -189,6 +194,7 @@ contract GHogRewardPool is ReentrancyGuard {
             );
         }
         pool.allocPoint = _allocPoint;
+        pool.gauge = _gauge;
     }
 
     // AI-CONTROLLED: Updates the emission rate every 7 days based on protocol conditions
@@ -276,6 +282,7 @@ contract GHogRewardPool is ReentrancyGuard {
 
     // Update reward variables of the given pool to be up-to-date.
     function updatePool(uint256 _pid) public {
+        depositToGauge(_pid);
         PoolInfo storage pool = poolInfo[_pid];
         if (block.timestamp <= pool.lastRewardTime) {
             return;
@@ -325,6 +332,7 @@ contract GHogRewardPool is ReentrancyGuard {
         if (_amount > 0) {
             pool.token.safeTransferFrom(_sender, address(this), _amount);
             user.amount = user.amount.add(_amount);
+            depositToGauge(_pid);
         }
         user.rewardDebt = user.amount.mul(pool.accGhogPerShare).div(1e18);
         emit Deposit(_sender, _pid, _amount);
@@ -346,7 +354,7 @@ contract GHogRewardPool is ReentrancyGuard {
         }
         if (_amount > 0) {
             user.amount = user.amount.sub(_amount);
-
+            withdrawFromGauge(_pid, _amount);
             // Calculate the fee and transfer it to the devFund
             uint256 fee = _amount.mul(pool.withFee).div(10000); // Assuming withFee is in basis points (e.g., 100 = 1%)
             uint256 amountAfterFee = _amount.sub(fee);
@@ -368,6 +376,7 @@ contract GHogRewardPool is ReentrancyGuard {
         uint256 _amount = user.amount;
         user.amount = 0;
         user.rewardDebt = 0;
+        withdrawFromGauge(_pid, _amount);
         pool.token.safeTransfer(msg.sender, _amount);
         emit EmergencyWithdraw(msg.sender, _pid, _amount);
     }
@@ -445,4 +454,40 @@ contract GHogRewardPool is ReentrancyGuard {
         
         return getGeneratedReward(_fromTime, _toTime);
     }
+
+    function depositToGauge(uint256 _pid) public {
+        PoolInfo storage pool = poolInfo[_pid];
+        address gauge = pool.gauge;
+        uint256 balance = pool.token.balanceOf(address(this));
+        // Do nothing if this pool doesn't have a gauge
+        if (pool.gauge != address(0)) {
+            // Do nothing if the LP token in the MC is empty
+            if (balance > 0) {
+                // Approve to the gauge
+                if (pool.token.allowance(address(this), gauge) < balance ){
+                    pool.token.approve(gauge, type(uint256).max);
+                }
+                ISwapxGauge(pool.gauge).deposit(balance);
+            }
+        }
+    }
+
+    
+    function claimSwapxRewards(uint256 _pid, address _token) public {
+        PoolInfo storage pool = poolInfo[_pid];
+        ISwapxGauge(pool.gauge).getReward(); // claim the swapx rewards
+        IERC20 rewardToken = IERC20(_token);
+        uint256 rewardAmount = rewardToken.balanceOf(address(this));
+        if (rewardAmount > 0) {
+            rewardToken.safeTransfer(devFund, rewardAmount);
+        }
+    }
+
+    function withdrawFromGauge(uint256 _pid, uint256 _amount) public {
+        PoolInfo storage pool = poolInfo[_pid];
+        // Do nothing if this pool doesn't have a gauge
+        if (pool.gauge != address(0)) {
+            // Withdraw from the gauge
+            ISwapxGauge(pool.gaugeInfo.gauge).withdraw(_amount); 
+        }
 }
