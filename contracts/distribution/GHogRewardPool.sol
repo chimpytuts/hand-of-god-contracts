@@ -195,6 +195,7 @@ contract GHogRewardPool is ReentrancyGuard {
         }
         pool.allocPoint = _allocPoint;
         pool.gauge = _gauge;
+        updatePool(_pid);
     }
 
     // AI-CONTROLLED: Updates the emission rate every 7 days based on protocol conditions

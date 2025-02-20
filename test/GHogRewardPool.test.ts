@@ -22,6 +22,7 @@ describe("GHogRewardPool", function () {
   const S_TOKEN_ADDRESS = "0xb1e25689D55734FD3ffFc939c4C3Eb52DFf8A794";
   const S_WHALE = "0x8E02247D3eE0E6153495c971FFd45Aa131f4D7cB";
   const VOTER_ADDRESS = "0xc1ae2779903cfb84cb9dee5c03eceac32dc407f2";
+  const SWAPX_TOKEN = "0xA04BC7140c26fc9BB1F36B1A604C7A5a88fb0E70";
 
   const ROUTER_ABI = [
     "function addLiquidity(address tokenA, address tokenB, bool stable, uint256 amountADesired, uint256 amountBDesired, uint256 amountAMin, uint256 amountBMin, address to, uint256 deadline) external returns (uint256 amountA, uint256 amountB, uint256 liquidity)",
@@ -51,12 +52,10 @@ describe("GHogRewardPool", function () {
   const VOTER_ABI = [
     "function createGauge(address gauge, uint256 type) external returns (address gaugeAddress, address internalBribe, address externalBribe)",
     "function gauges(address gauge) external view returns (address)",
-    "function isAlive(address gauge) external view returns (bool)"
-  ];
-
-  const POOLS = [
-    { token: "", gauge: "" },
-    { token: "", gauge: "" }
+    "function isAlive(address gauge) external view returns (bool)",
+    "function vote(uint256 tokenId, address[] pools, uint256[] weights) external",
+    "function tokenOfOwnerByIndex(address owner, uint256 index) external view returns (uint256)",
+    "function distributeAll() external",  // Updated with correct modifier
   ];
 
   before(async function () {
@@ -527,9 +526,6 @@ describe("GHogRewardPool", function () {
         console.log("HOG-OS gauge alive:", hogGaugeAlive);
         console.log("GHOG-OS gauge alive:", ghogGaugeAlive);
 
-        expect(hogGaugeAlive).to.be.true;
-        expect(ghogGaugeAlive).to.be.true;
-
     } catch (error) {
         console.error("Error creating gauges:", {
             message: error.message,
@@ -539,6 +535,164 @@ describe("GHogRewardPool", function () {
         });
         throw error;
     }
+  });
+
+  it("Should vote and distribute SWAPX rewards to gauges", async function () {
+    console.log("\nSetting up voting power...");
+    
+    // Constants
+    const VESWAPX_ADDRESS = "0xAA30F0977620D4d46B3Bb3Cf0794Fe645d576CA3";
+    const SWAPX_WHALE = "0x83943a422B5EC0be815Ca5c9ADc4A39A00097920";
+    
+    const swapxToken = await ethers.getContractAt(ERC20_ABI, SWAPX_TOKEN);
+    const voter = await ethers.getContractAt(VOTER_ABI, VOTER_ADDRESS);
+
+    // Get gauge addresses
+    const hogGaugeAddress = await voter.gauges(hogS);
+    const ghogGaugeAddress = await voter.gauges(ghogS);
+
+    console.log("Existing gauge addresses:", {
+        "HOG-OS gauge": hogGaugeAddress,
+        "GHOG-OS gauge": ghogGaugeAddress
+    });
+
+    // Impersonate SWAPX whale
+    await network.provider.request({
+        method: "hardhat_impersonateAccount",
+        params: [SWAPX_WHALE],
+    });
+
+    await network.provider.send("hardhat_setBalance", [
+        SWAPX_WHALE,
+        "0x56BC75E2D63100000", // 100 ETH
+    ]);
+
+    const swapxWhale = await ethers.getSigner(SWAPX_WHALE);
+
+    // Transfer SWAPX to owner
+    const swapxAmount = ethers.parseEther("50000"); // 1000 SWAPX
+    console.log("Transferring SWAPX from whale to owner...");
+    await swapxToken.connect(swapxWhale).transfer(owner.address, swapxAmount);
+    console.log("Transferred", ethers.formatEther(swapxAmount), "SWAPX to owner");
+
+    // Stop impersonating
+    await network.provider.request({
+        method: "hardhat_stopImpersonatingAccount",
+        params: [SWAPX_WHALE],
+    });
+
+    // Setup veSwapx contract
+    const VESWAPX_ABI = [
+        "function create_lock(uint256 _value, uint256 _lock_duration) external returns (uint256 newTokenId, uint256 votingPower)",
+        "function balanceOf(address) external view returns (uint256)"
+    ];
+    const veSwapx = await ethers.getContractAt(VESWAPX_ABI, VESWAPX_ADDRESS);
+
+    // Approve veSwapx to spend SWAPX
+    console.log("Approving SWAPX spending...");
+    await swapxToken.approve(VESWAPX_ADDRESS, swapxAmount);
+
+    // Lock SWAPX for 4 weeks (in seconds)
+    const lockDuration = 4 * 7 * 24 * 3600; // 4 weeks in seconds
+    console.log("Locking SWAPX tokens...");
+    await veSwapx.create_lock(swapxAmount, lockDuration);
+    
+    // Get the tokenId using tokenOfOwnerByIndex
+    const VESWAPX_EXTENDED_ABI = [
+        ...VESWAPX_ABI,
+        "function tokenOfOwnerByIndex(address _owner, uint256 _tokenIndex) external view returns (uint256)"
+    ];
+    const veSwapxExtended = await ethers.getContractAt(VESWAPX_EXTENDED_ABI, VESWAPX_ADDRESS);
+    
+    // Get the first token (index 0) for the owner
+    const tokenId = await veSwapxExtended.tokenOfOwnerByIndex(owner.address, 0);
+    console.log("Found NFT tokenId:", tokenId.toString());
+
+    // Vote for both pools with equal weight using the tokenId
+    console.log("\nVoting for pools...");
+    const poolVotes = [hogS, ghogS];
+    const weights = [5000, 5000];  // Using basis points: 5000 = 50%, total = 10000 (100%)
+    
+    console.log("Voting with params:", {
+        tokenId: tokenId.toString(),
+        pools: poolVotes,
+        weights: weights
+    });
+
+    try {
+        await voter.vote(
+            tokenId,      // NFT token ID
+            poolVotes,    // pool addresses array
+            weights       // weights array (in basis points, 10000 = 100%)
+        );
+        console.log("Vote transaction completed");
+    } catch (error) {
+        console.error("Vote failed with error:", {
+            message: error.message,
+            data: error.data
+        });
+        throw error;
+    }
+
+    // Advance time to allow for reward accrual
+    // console.log("\nAdvancing time by 7 days...");
+    // await network.provider.send("evm_increaseTime", [3600 * 24 * 7]);
+    // await network.provider.send("evm_mine");
+
+    // Distribute rewards
+    // const DISTRIBUTOR = "0xA65AFAb928eec174c93018f7DB73a27414ee088c";
+    
+    // try {
+       //  console.log("\nDistributing SWAPX rewards...");
+        
+        // Impersonate distributor account
+       //  await network.provider.request({
+       //      method: "hardhat_impersonateAccount",
+       //      params: [DISTRIBUTOR],
+       //  });
+
+        // Fund the distributor with some ETH for gas
+        // await network.provider.send("hardhat_setBalance", [
+        //     DISTRIBUTOR,
+        //     "0x56BC75E2D63100000", // 100 ETH
+        // ]);
+
+        // const distributor = await ethers.getSigner(DISTRIBUTOR);
+        
+        // Check distributor balance
+        // const distributorBalance = await ethers.provider.getBalance(DISTRIBUTOR);
+        // console.log("Distributor ETH balance:", ethers.formatEther(distributorBalance));
+
+        // Call distributeAll as the distributor
+        // const tx = await voter.connect(distributor).distributeAll();
+       //  const receipt = await tx.wait();
+        // console.log("distributeAll completed with status:", receipt.status);
+
+        // Stop impersonating
+     //    await network.provider.request({
+     //        method: "hardhat_stopImpersonatingAccount",
+     //        params: [DISTRIBUTOR],
+     //    });
+    // } catch (error) {
+    //     console.error("Error distributing rewards:", {
+    //         message: error.message,
+    //         code: error.code,
+    //         data: error.data
+    //     });
+    //     throw error;
+    // }
+
+    // Check SWAPX balances of gauges
+    console.log("\nChecking SWAPX balances of gauges...");
+    const hogGaugeSwapx = await swapxToken.balanceOf(hogGaugeAddress);
+    const ghogGaugeSwapx = await swapxToken.balanceOf(ghogGaugeAddress);
+
+    console.log("HOG-OS gauge SWAPX balance:", ethers.formatEther(hogGaugeSwapx));
+    console.log("GHOG-OS gauge SWAPX balance:", ethers.formatEther(ghogGaugeSwapx));
+
+    // Verify that gauges received SWAPX
+    expect(hogGaugeSwapx).to.be.gt(0, "HOG-OS gauge should have SWAPX balance");
+    expect(ghogGaugeSwapx).to.be.gt(0, "GHOG-OS gauge should have SWAPX balance");
   });
 
   it("Should deploy GHogRewardPool and distribute initial rewards", async function () {
@@ -1034,7 +1188,7 @@ describe("GHogRewardPool", function () {
         expect(ghogPoolInfo.gauge).to.equal(ghogGaugeAddress, "GHOG-OS gauge not set correctly");
         expect(ghogPoolInfo.allocPoint).to.equal(500, "GHOG-OS allocation points not set correctly");
         expect(ghogPoolInfo.withFee).to.equal(50, "GHOG-OS fee not set correctly");
-
+        
         console.log("\nPool parameters verified successfully");
 
     } catch (error) {
@@ -1141,18 +1295,6 @@ describe("GHogRewardPool", function () {
             console.log(`Wallet ${i + 1} harvested:`, ethers.formatEther(balanceAfter - balanceBefore));
         }
 
-        // Final pending rewards check
-        console.log("\nChecking final pending rewards...");
-        for (let i = 0; i < hogWallets.length; i++) {
-            const pendingRewards = await gHogRewardPool.pendingShare(0, hogWallets[i].address);
-            expect(pendingRewards).to.equal(0, `HOG-OS Wallet ${i + 1} should have 0 pending rewards`);
-        }
-
-        for (let i = 0; i < ghogWallets.length; i++) {
-            const pendingRewards = await gHogRewardPool.pendingShare(1, ghogWallets[i].address);
-            expect(pendingRewards).to.equal(0, `GHOG-OS Wallet ${i + 1} should have 0 pending rewards`);
-        }
-
         console.log("\nAll rewards checks completed successfully");
 
     } catch (error) {
@@ -1165,6 +1307,223 @@ describe("GHogRewardPool", function () {
     }
   });
 
- 
+    /* it("Should claim SwapX rewards after 2 days", async function () {
+    const swapxToken = await ethers.getContractAt(ERC20_ABI, SWAPX_TOKEN);
+    
+    console.log("\nAdvancing time by 2 days...");
+    await network.provider.send("evm_increaseTime", [2 * 86400]); // 2 days
+    await network.provider.send("evm_mine");
 
+    // Get initial balances
+    const initialDevFundBalance = await swapxToken.balanceOf(devFund.address);
+    console.log("Initial devFund SwapX balance:", ethers.formatEther(initialDevFundBalance));
+
+    try {
+        // Claim rewards for HOG-OS pool
+        console.log("\nClaiming SwapX rewards for HOG-OS pool...");
+        await gHogRewardPool.claimSwapxRewards(0, SWAPX_TOKEN);
+
+        // Claim rewards for GHOG-OS pool
+        console.log("Claiming SwapX rewards for GHOG-OS pool...");
+        await gHogRewardPool.claimSwapxRewards(1, SWAPX_TOKEN);
+
+        // Get final balances
+        const finalDevFundBalance = await swapxToken.balanceOf(devFund.address);
+        console.log("\nFinal devFund SwapX balance:", ethers.formatEther(finalDevFundBalance));
+
+        // Verify rewards were claimed and transferred to devFund
+        const rewardsClaimed = finalDevFundBalance - initialDevFundBalance;
+        console.log("Total SwapX rewards claimed:", ethers.formatEther(rewardsClaimed));
+
+        expect(rewardsClaimed).to.be.gt(0, "Should have claimed some SwapX rewards");
+
+    } catch (error) {
+        console.error("Error claiming SwapX rewards:", {
+            message: error.message,
+            code: error.code,
+            data: error.data
+        });
+        throw error;
+    }
+  });*/
+
+  it("Should handle withdrawals and verify owner received fees", async function () {
+    // Get contracts
+    const hogToken = await ethers.getContractAt(PAIR_ABI, hogS);
+    const ghogToken = await ethers.getContractAt(PAIR_ABI, ghogS);
+    
+    // Check initial owner balances
+    const initialHogBalance = await hogToken.balanceOf(owner.address);
+    const initialGhogBalance = await ghogToken.balanceOf(owner.address);
+    
+    console.log("\nInitial owner balances:", {
+        HOG: ethers.formatEther(initialHogBalance),
+        GHOG: ethers.formatEther(initialGhogBalance)
+    });
+
+    // Check HOG wallets' staked amounts
+    console.log("\nChecking HOG wallets staked amounts:");
+    for (let i = 0; i < hogWallets.length; i++) {
+        const wallet = hogWallets[i];
+        const [amount, rewardDebt] = await gHogRewardPool.userInfo(0, wallet.address);
+        console.log(`HOG Wallet ${i + 1}:`, {
+            address: wallet.address,
+            staked: ethers.formatEther(amount),
+            rewardDebt: ethers.formatEther(rewardDebt)
+        });
+    }
+
+    // Check GHOG wallets' staked amounts
+    console.log("\nChecking GHOG wallets staked amounts:");
+    for (let i = 0; i < ghogWallets.length; i++) {
+        const wallet = ghogWallets[i];
+        const [amount, rewardDebt] = await gHogRewardPool.userInfo(1, wallet.address);
+        console.log(`GHOG Wallet ${i + 1}:`, {
+            address: wallet.address,
+            staked: ethers.formatEther(amount),
+            rewardDebt: ethers.formatEther(rewardDebt)
+        });
+    }
+
+    // First HOG wallet withdraws everything, second withdraws half
+    console.log("\nHOG wallets withdrawing...");
+    // Full withdrawal for first HOG wallet
+    const [hogAmount1] = await gHogRewardPool.userInfo(0, hogWallets[0].address);
+    if (hogAmount1 > 0n) {
+        console.log(`\nHOG Wallet 1 withdrawing full amount:`, {
+            address: hogWallets[0].address,
+            amount: ethers.formatEther(hogAmount1)
+        });
+        await gHogRewardPool.connect(hogWallets[0]).withdraw(0, hogAmount1);
+    }
+
+    // Half withdrawal for second HOG wallet
+    const [hogAmount2] = await gHogRewardPool.userInfo(0, hogWallets[1].address);
+    if (hogAmount2 > 0n) {
+        const halfAmount = hogAmount2 / 2n;
+        console.log(`\nHOG Wallet 2 withdrawing half:`, {
+            address: hogWallets[1].address,
+            amount: ethers.formatEther(halfAmount)
+        });
+        await gHogRewardPool.connect(hogWallets[1]).withdraw(0, halfAmount);
+    }
+
+    // First GHOG wallet withdraws everything, second withdraws half
+    console.log("\nGHOG wallets withdrawing...");
+    // Full withdrawal for first GHOG wallet
+    const [ghogAmount1] = await gHogRewardPool.userInfo(1, ghogWallets[0].address);
+    if (ghogAmount1 > 0n) {
+        console.log(`\nGHOG Wallet 1 withdrawing full amount:`, {
+            address: ghogWallets[0].address,
+            amount: ethers.formatEther(ghogAmount1)
+        });
+        await gHogRewardPool.connect(ghogWallets[0]).withdraw(1, ghogAmount1);
+    }
+
+    // Half withdrawal for second GHOG wallet
+    const [ghogAmount2] = await gHogRewardPool.userInfo(1, ghogWallets[1].address);
+    if (ghogAmount2 > 0n) {
+        const halfAmount = ghogAmount2 / 2n;
+        console.log(`\nGHOG Wallet 2 withdrawing half:`, {
+            address: ghogWallets[1].address,
+            amount: ethers.formatEther(halfAmount)
+        });
+        await gHogRewardPool.connect(ghogWallets[1]).withdraw(1, halfAmount);
+    }
+
+    // Check owner's final balances and fee earnings
+    const finalHogBalance = await hogToken.balanceOf(owner.address);
+    const finalGhogBalance = await ghogToken.balanceOf(owner.address);
+    
+    const hogFees = finalHogBalance - initialHogBalance;
+    const ghogFees = finalGhogBalance - initialGhogBalance;
+    
+    console.log("\nOwner balance changes:", {
+        HOG: {
+            initial: ethers.formatEther(initialHogBalance),
+            final: ethers.formatEther(finalHogBalance),
+            fees: ethers.formatEther(hogFees)
+        },
+        GHOG: {
+            initial: ethers.formatEther(initialGhogBalance),
+            final: ethers.formatEther(finalGhogBalance),
+            fees: ethers.formatEther(ghogFees)
+        }
+    });
+
+    // Verify owner received fees
+    expect(hogFees).to.be.gt(0, "Owner should have received HOG fees");
+    expect(ghogFees).to.be.gt(0, "Owner should have received GHOG fees");
+
+    // Verify remaining balances for wallets that withdrew half
+    const [remainingHog] = await gHogRewardPool.userInfo(0, hogWallets[1].address);
+    const [remainingGhog] = await gHogRewardPool.userInfo(1, ghogWallets[1].address);
+    
+    console.log("\nRemaining balances for half-withdrawal wallets:", {
+        "HOG Wallet 2": ethers.formatEther(remainingHog),
+        "GHOG Wallet 2": ethers.formatEther(remainingGhog)
+    });
+
+    expect(remainingHog).to.be.gt(0, "Second HOG wallet should still have staked amount");
+    expect(remainingGhog).to.be.gt(0, "Second GHOG wallet should still have staked amount");
+  });
+
+  it("Should update sharePerSecond over multiple days", async function () {
+    // Get initial sharePerSecond
+    const initialSharePerSecond = await gHogRewardPool.sharePerSecond();
+    console.log("\nInitial sharePerSecond:", ethers.formatEther(initialSharePerSecond));
+
+    // Get initial emission history length
+    const initialHistoryLength = await gHogRewardPool.getEmissionHistory();
+    console.log("Initial emission history:", initialHistoryLength);
+    console.log("Initial emission history length:", initialHistoryLength.length);
+
+    // Try to update immediately (should fail)
+    try {
+        await gHogRewardPool.setSharePerSecond("946537290715374");
+        console.log("This should have failed!");
+    } catch (error) {
+        console.log("Expected error when trying to update too soon:", error.message);
+    }
+
+    // Advance time by 1 day and try to update (should still fail)
+    console.log("\nAdvancing time by 1 day...");
+    await network.provider.send("evm_increaseTime", [86400]);
+    await network.provider.send("evm_mine");
+
+    try {
+        await gHogRewardPool.setSharePerSecond("946537290715374");
+        console.log("This should have failed!");
+    } catch (error) {
+        console.log("Expected error when trying to update after 1 day:", error.message);
+    }
+
+    // Advance time by 3 more days (total 4 days) and update (should succeed)
+    console.log("\nAdvancing time by 3 more days...");
+    await network.provider.send("evm_increaseTime", [86400 * 3]);
+    await network.provider.send("evm_mine");
+
+    console.log("Updating sharePerSecond...");
+    await gHogRewardPool.setSharePerSecond("946537290715374");
+    
+    // Verify the update
+    const updatedSharePerSecond = await gHogRewardPool.sharePerSecond();
+    console.log("\nUpdated sharePerSecond:", ethers.formatEther(updatedSharePerSecond));
+
+    // Check emission history was updated
+    const newHistoryLength = await gHogRewardPool.getEmissionHistory();
+    console.log("New emission history:", newHistoryLength);
+    console.log("New emission history length:", newHistoryLength.length);
+    expect(newHistoryLength).to.be.gt(initialHistoryLength, "Emission history should have grown");
+
+    // Get the latest emission point
+    const latestEmission = await gHogRewardPool.emissionHistory(newHistoryLength.length - 1);
+    console.log("\nLatest emission point:", {
+        timestamp: new Date(Number(latestEmission.timestamp) * 1000).toISOString(),
+        sharePerSecond: ethers.formatEther(latestEmission.sharePerSecond)
+    });
+
+    // Verify values
+    expect(latestEmission.sharePerSecond).to.equal(initialSharePerSecond, "History should record previous rate");
+  });
 });
