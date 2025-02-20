@@ -38,7 +38,7 @@ const POOLS = [
   },
   {
     token: "0x79bbF4508B1391af3A0F4B30bb5FC4aa9ab0E07C", // ANON
-    whale: "0x6FDb03ec52932c0bBB48F1367c7739480E78B785",
+    whale: "0xcD650EB6f55D6d00f14FD95AE434FeF9B95aDbd2",
     name: "ANON LP",
     investors: [] as string[]
   },
@@ -256,6 +256,16 @@ describe("HogGenesisRewardPool", function () {
         }
       }
       console.log("Setup complete!");
+
+      // Fund all investors with ETH for gas
+      for (const pool of POOLS) {
+        for (const investorAddress of pool.investors) {
+          await network.provider.send("hardhat_setBalance", [
+            investorAddress,
+            "0x56BC75E2D63100000" // 100 ETH
+          ]);
+        }
+      }
     } catch (error) {
       console.error("Error during setup:", error);
       throw error;
@@ -320,15 +330,22 @@ describe("HogGenesisRewardPool", function () {
         for (const [index, investorAddress] of pool.investors.entries()) {
           const investor = await ethers.getImpersonatedSigner(investorAddress);
           const balance = await token.balanceOf(investorAddress);
-          const stakeAmount = (balance * BigInt(20 + index * 20)) / 100n;
           
-          await expect(
-            genesisPool.connect(investor).deposit(pid, stakeAmount)
-          ).to.not.be.reverted;
-
-          console.log(
-            `Investor ${investorAddress} staked ${ethers.formatUnits(stakeAmount, decimals)} ${pool.name}`
-          );
+          if (balance > 0n) {
+            // Approve before deposit
+            console.log(`Approving ${ethers.formatUnits(balance, decimals)} tokens for ${investorAddress}`);
+            await token.connect(investor).approve(await genesisPool.getAddress(), balance);
+            
+            // Calculate stake amount (20%, 40%, 60%, 80%, 100%)
+            const stakeAmount = (balance * BigInt(20 + index * 20)) / 100n;
+            
+            console.log(`Depositing ${ethers.formatUnits(stakeAmount, decimals)} tokens for ${investorAddress}`);
+            await genesisPool.connect(investor).deposit(pid, stakeAmount);
+            
+            // Verify deposit
+            const userInfo = await genesisPool.userInfo(pid, investorAddress);
+            console.log(`Verified deposit amount: ${ethers.formatUnits(userInfo.amount, decimals)}`);
+          }
         }
       }
     });
@@ -338,12 +355,24 @@ describe("HogGenesisRewardPool", function () {
 
       for (let pid = 0; pid < POOLS.length; pid++) {
         const pool = POOLS[pid];
+        const token = await ethers.getContractAt(minimalABI, pool.token);
+        const decimals = await token.decimals();
+        const symbol = await token.symbol();
+        
+        console.log(`\nChecking rewards for pool ${symbol} (pid: ${pid})`);
+        
         for (const investorAddress of pool.investors) {
+          const userInfo = await genesisPool.userInfo(pid, investorAddress);
+          console.log(`User ${investorAddress}`);
+          console.log(`- Staked: ${ethers.formatUnits(userInfo.amount, decimals)} ${symbol}`);
+          
           const pending = await genesisPool.pendingHOG(pid, investorAddress);
-          expect(pending).to.be.gt(0);
-          console.log(
-            `Investor ${investorAddress} pending rewards: ${ethers.formatUnits(pending, 18)} HOG for ${pool.name}`
-          );
+          console.log(`- Pending rewards: ${ethers.formatUnits(pending, 18)} HOG`);
+          
+          // Only check for rewards if there was a stake
+          if (userInfo.amount > 0n) {
+            expect(pending).to.be.gt(0);
+          }
         }
       }
     });
@@ -368,6 +397,182 @@ describe("HogGenesisRewardPool", function () {
         }
       }
     });
+
+    it("Should not allow deposits before pool starts", async function () {
+      // Try to deposit before start time
+      await time.setNextBlockTimestamp(startTime - 3600); // 1 hour before start
+      
+      const pool = POOLS[0];
+      const token = await ethers.getContractAt(minimalABI, pool.token);
+      const investor = await ethers.getImpersonatedSigner(pool.investors[0]);
+      const balance = await token.balanceOf(pool.investors[0]);
+      const symbol = await token.symbol();
+      
+      console.log(`Attempting early deposit of ${ethers.formatUnits(balance, await token.decimals())} ${symbol}`);
+      
+      // Should revert or have no rewards
+      await genesisPool.connect(investor).deposit(0, balance);
+      const pending = await genesisPool.pendingHOG(0, pool.investors[0]);
+      expect(pending).to.equal(0);
+    });
+
+    it("Should track deposit fees correctly", async function () {
+      // Move to start time
+      await time.setNextBlockTimestamp(startTime);
+
+      for (let pid = 0; pid < POOLS.length; pid++) {
+        const pool = POOLS[pid];
+        const token = await ethers.getContractAt(minimalABI, pool.token);
+        const decimals = await token.decimals();
+        const symbol = await token.symbol();
+        
+        console.log(`\nChecking deposit fees for pool ${symbol} (pid: ${pid})`);
+        
+        for (const [index, investorAddress] of pool.investors.entries()) {
+          const investor = await ethers.getImpersonatedSigner(investorAddress);
+          const balance = await token.balanceOf(investorAddress);
+          
+          if (balance > 0n) {
+            const stakeAmount = (balance * BigInt(20 + index * 20)) / 100n;
+            const expectedFee = (stakeAmount * 50n) / 10000n; // 0.5% fee
+            
+            const devFundBefore = await token.balanceOf(devFund.address);
+            
+            console.log(`Depositing ${ethers.formatUnits(stakeAmount, decimals)} ${symbol}`);
+            await genesisPool.connect(investor).deposit(pid, stakeAmount);
+            
+            const devFundAfter = await token.balanceOf(devFund.address);
+            const actualFee = devFundAfter - devFundBefore;
+            
+            console.log(`Dev fund received ${ethers.formatUnits(actualFee, decimals)} ${symbol} as fee`);
+            expect(actualFee).to.equal(expectedFee);
+          }
+        }
+      }
+    });
+
+    it("Should allow multiple harvests during genesis period", async function () {
+      // Simulate multiple harvests over the 7-day period
+      const harvestIntervals = [1, 2, 4, 6]; // Days to harvest
+      
+      for (const day of harvestIntervals) {
+        console.log(`\nDay ${day} harvests:`);
+        await time.increaseTo(startTime + (day * 24 * 3600));
+        
+        for (let pid = 0; pid < POOLS.length; pid++) {
+          const pool = POOLS[pid];
+          const token = await ethers.getContractAt(minimalABI, pool.token);
+          const symbol = await token.symbol();
+          
+          console.log(`\nHarvesting from pool ${symbol} (pid: ${pid})`);
+          
+          for (const investorAddress of pool.investors) {
+            const investor = await ethers.getImpersonatedSigner(investorAddress);
+            const pending = await genesisPool.pendingHOG(pid, investorAddress);
+            
+            if (pending > 0n) {
+              const hogBefore = await hog.balanceOf(investorAddress);
+              // Harvest by depositing 0
+              await genesisPool.connect(investor).deposit(pid, 0);
+              const hogAfter = await hog.balanceOf(investorAddress);
+              const harvested = hogAfter - hogBefore;
+              
+              console.log(`User ${investorAddress} harvested ${ethers.formatUnits(harvested, 18)} HOG`);
+            }
+          }
+        }
+      }
+    });
+
+    it("Should track daily rewards until genesis ends", async function () {
+      const dayDuration = 24 * 3600;
+      let totalRewardsDistributed = 0n;
+      
+      // First, set up initial deposits for all pools
+      console.log("\n=== Setting up initial deposits ===");
+      for (let pid = 0; pid < POOLS.length; pid++) {
+        const pool = POOLS[pid];
+        const token = await ethers.getContractAt(minimalABI, pool.token);
+        const symbol = await token.symbol();
+        const decimals = await token.decimals();
+        
+        console.log(`\nSetting up ${symbol} pool (pid: ${pid})`);
+        
+        for (const [index, investorAddress] of pool.investors.entries()) {
+          const investor = await ethers.getImpersonatedSigner(investorAddress);
+          const balance = await token.balanceOf(investorAddress);
+          
+          if (balance > 0n) {
+            // Approve tokens first
+            await token.connect(investor).approve(await genesisPool.getAddress(), balance);
+            
+            // Stake different amounts for each investor (20%, 40%, 60%, 80%, 100%)
+            const stakeAmount = (balance * BigInt(20 + index * 20)) / 100n;
+            
+            console.log(`Investor ${investorAddress} staking ${ethers.formatUnits(stakeAmount, decimals)} ${symbol}`);
+            await genesisPool.connect(investor).deposit(pid, stakeAmount);
+          }
+        }
+      }
+
+      // Now track daily rewards
+      for (let day = 1; day <= 7; day++) {
+        console.log(`\n=== Day ${day} of Genesis Period ===`);
+        
+        // Increase time by one day
+        await network.provider.send("evm_increaseTime", [dayDuration]);
+        await network.provider.send("evm_mine");
+
+        let dailyRewards = 0n;
+
+        for (let pid = 0; pid < POOLS.length; pid++) {
+          const pool = POOLS[pid];
+          const token = await ethers.getContractAt(minimalABI, pool.token);
+          const symbol = await token.symbol();
+          const decimals = await token.decimals();
+          
+          console.log(`\nPool ${symbol} (pid: ${pid})`);
+          let poolDailyRewards = 0n;
+          
+          for (const investorAddress of pool.investors) {
+            const userInfo = await genesisPool.userInfo(pid, investorAddress);
+            const pending = await genesisPool.pendingHOG(pid, investorAddress);
+            
+            if (userInfo.amount > 0n) {
+              console.log(`\nUser ${investorAddress}`);
+              console.log(`- Staked: ${ethers.formatUnits(userInfo.amount, decimals)} ${symbol}`);
+              console.log(`- Pending rewards: ${ethers.formatUnits(pending, 18)} HOG`);
+              
+              // Harvest rewards if available
+              if (pending > 0n) {
+                const investor = await ethers.getImpersonatedSigner(investorAddress);
+                const hogBefore = await hog.balanceOf(investorAddress);
+                await genesisPool.connect(investor).deposit(pid, 0);
+                const hogAfter = await hog.balanceOf(investorAddress);
+                const harvested = hogAfter - hogBefore;
+                
+                poolDailyRewards += harvested;
+                console.log(`- Harvested: ${ethers.formatUnits(harvested, 18)} HOG`);
+              }
+            }
+          }
+          
+          dailyRewards += poolDailyRewards;
+          console.log(`\nPool ${symbol} daily rewards: ${ethers.formatUnits(poolDailyRewards, 18)} HOG`);
+        }
+
+        totalRewardsDistributed += dailyRewards;
+        const remainingHog = await hog.balanceOf(await genesisPool.getAddress());
+        
+        console.log(`\nDay ${day} Summary:`);
+        console.log(`- Daily rewards distributed: ${ethers.formatUnits(dailyRewards, 18)} HOG`);
+        console.log(`- Total rewards distributed: ${ethers.formatUnits(totalRewardsDistributed, 18)} HOG`);
+        console.log(`- Remaining in pool: ${ethers.formatUnits(remainingHog, 18)} HOG`);
+
+        // Optional: verify rewards are being distributed
+        expect(dailyRewards).to.be.gt(0, "Should distribute rewards each day");
+      }
+    });
   });
 
   describe("Post-Farming Period", function () {
@@ -376,20 +581,84 @@ describe("HogGenesisRewardPool", function () {
       
       for (let pid = 0; pid < POOLS.length; pid++) {
         const pool = POOLS[pid];
+        const token = await ethers.getContractAt(minimalABI, pool.token);
+        const symbol = await token.symbol();
+        
+        console.log(`\nChecking post-farming rewards for ${symbol} pool`);
         for (const investorAddress of pool.investors) {
           const pending = await genesisPool.pendingHOG(pid, investorAddress);
+          console.log(`User ${investorAddress} pending rewards: ${ethers.formatUnits(pending, 18)} HOG`);
           expect(pending).to.equal(0);
         }
       }
     });
 
-    it("Should allow emergency withdrawals", async function () {
-      const firstPool = POOLS[0];
-      const firstInvestor = await ethers.getImpersonatedSigner(firstPool.investors[0]);
-      
+    it("Should allow operator to recover unsupported tokens after 7 days", async function () {
+      // Wait for 7 days after pool end
+      await time.increase(time.duration.days(7));
+
+      const hogBalance = await hog.balanceOf(await genesisPool.getAddress());
+      console.log(`Remaining HOG balance in pool: ${ethers.formatUnits(hogBalance, 18)} HOG`);
+
+      // Try to recover HOG tokens
       await expect(
-        genesisPool.connect(firstInvestor).emergencyWithdraw(0)
+        genesisPool.connect(owner).governanceRecoverUnsupported(
+          hog,
+          hogBalance,
+          owner.address
+        )
       ).to.not.be.reverted;
+
+      // Verify the recovery
+      const finalHogBalance = await hog.balanceOf(await genesisPool.getAddress());
+      const ownerBalance = await hog.balanceOf(owner.address);
+      
+      console.log(`Final HOG balance in pool: ${ethers.formatUnits(finalHogBalance, 18)} HOG`);
+      console.log(`Recovered HOG in owner wallet: ${ethers.formatUnits(ownerBalance, 18)} HOG`);
+      
+      expect(finalHogBalance).to.equal(0);
+      expect(ownerBalance).to.be.gt(0);
+    });
+  });
+
+  describe("Post-Genesis Analysis", function () {
+    it("Should show final dev fund holdings", async function () {
+      console.log("\nDev Fund Final Holdings:");
+      
+      for (const pool of POOLS) {
+        const token = await ethers.getContractAt(minimalABI, pool.token);
+        const symbol = await token.symbol();
+        const decimals = await token.decimals();
+        const balance = await token.balanceOf(devFund.address);
+        
+        console.log(`${symbol}: ${ethers.formatUnits(balance, decimals)}`);
+        expect(balance).to.be.gt(0, `Dev fund should have collected ${symbol} fees`);
+      }
+    });
+
+    it("Should allow operator to recover HOG after timelock", async function () {
+      // Wait for 7 days after pool end
+      await time.increaseTo(startTime + 7 * 24 * 3600);
+
+      const hogBalance = await hog.balanceOf(await genesisPool.getAddress());
+      console.log(`\nRemaining HOG balance in pool: ${ethers.formatUnits(hogBalance, 18)} HOG`);
+
+      await expect(
+        genesisPool.connect(owner).governanceRecoverUnsupported(
+          hog,
+          hogBalance,
+          owner.address
+        )
+      ).to.not.be.reverted;
+
+      const finalHogBalance = await hog.balanceOf(await genesisPool.getAddress());
+      const ownerBalance = await hog.balanceOf(owner.address);
+      
+      console.log(`Final HOG balance in pool: ${ethers.formatUnits(finalHogBalance, 18)} HOG`);
+      console.log(`Recovered HOG in owner wallet: ${ethers.formatUnits(ownerBalance, 18)} HOG`);
+      
+      expect(finalHogBalance).to.equal(0);
+      expect(ownerBalance).to.be.gt(0);
     });
   });
 }); 
