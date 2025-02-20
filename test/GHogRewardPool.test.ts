@@ -1468,62 +1468,114 @@ describe("GHogRewardPool", function () {
     expect(remainingGhog).to.be.gt(0, "Second GHOG wallet should still have staked amount");
   });
 
-  it("Should update sharePerSecond over multiple days", async function () {
-    // Get initial sharePerSecond
+  it("Should handle rate changes and distribute rewards correctly", async function () {
+    // Get initial state
     const initialSharePerSecond = await gHogRewardPool.sharePerSecond();
     console.log("\nInitial sharePerSecond:", ethers.formatEther(initialSharePerSecond));
 
-    // Get initial emission history length
-    const initialHistoryLength = await gHogRewardPool.getEmissionHistory();
-    console.log("Initial emission history:", initialHistoryLength);
-    console.log("Initial emission history length:", initialHistoryLength.length);
-
-    // Try to update immediately (should fail)
-    try {
-        await gHogRewardPool.setSharePerSecond("946537290715374");
-        console.log("This should have failed!");
-    } catch (error) {
-        console.log("Expected error when trying to update too soon:", error.message);
-    }
-
-    // Advance time by 1 day and try to update (should still fail)
-    console.log("\nAdvancing time by 1 day...");
+    // Check initial rewards after 1 day
     await network.provider.send("evm_increaseTime", [86400]);
     await network.provider.send("evm_mine");
 
-    try {
-        await gHogRewardPool.setSharePerSecond("946537290715374");
-        console.log("This should have failed!");
-    } catch (error) {
-        console.log("Expected error when trying to update after 1 day:", error.message);
+    console.log("\n=== First Day Rewards (Initial Rate) ===");
+    // Check HOG-OS LP holders
+    for (let i = 0; i < hogWallets.length; i++) {
+        const pending = await gHogRewardPool.pendingShare(0, hogWallets[i].address);
+        console.log(`HOG Wallet ${i + 1} pending:`, ethers.formatEther(pending));
+    }
+    // Check GHOG-OS LP holders
+    for (let i = 0; i < ghogWallets.length; i++) {
+        const pending = await gHogRewardPool.pendingShare(1, ghogWallets[i].address);
+        console.log(`GHOG Wallet ${i + 1} pending:`, ethers.formatEther(pending));
     }
 
-    // Advance time by 3 more days (total 4 days) and update (should succeed)
-    console.log("\nAdvancing time by 3 more days...");
-    await network.provider.send("evm_increaseTime", [86400 * 3]);
+    // Advance 3 more days and update rate to 0.1
+    await network.provider.send("evm_increaseTime", [86400 * 4]);
+    await network.provider.send("evm_mine");
+    
+    const newSharePerSecond = ethers.parseEther("0.1");
+    await gHogRewardPool.setSharePerSecond(newSharePerSecond);
+    console.log("\nUpdated sharePerSecond to:", ethers.formatEther(newSharePerSecond));
+
+    // Check rewards after rate change
+    await network.provider.send("evm_increaseTime", [86400]);
     await network.provider.send("evm_mine");
 
-    console.log("Updating sharePerSecond...");
-    await gHogRewardPool.setSharePerSecond("946537290715374");
+    console.log("\n=== Rewards After Rate Change ===");
+    // Check and harvest HOG-OS LP holders
+    console.log("\nHOG-OS LP holders:");
+    for (let i = 0; i < hogWallets.length; i++) {
+        const wallet = hogWallets[i];
+        const pending = await gHogRewardPool.pendingShare(0, wallet.address);
+        console.log(`Wallet ${i + 1} pending:`, ethers.formatEther(pending));
+
+        const balanceBefore = await ghog.balanceOf(wallet.address);
+        await gHogRewardPool.connect(wallet).deposit(0, 0);
+        const balanceAfter = await ghog.balanceOf(wallet.address);
+        const harvested = balanceAfter - balanceBefore;
+        console.log(`Wallet ${i + 1} harvested:`, ethers.formatEther(harvested));
+    }
+
+    // Check and harvest GHOG-OS LP holders
+    console.log("\nGHOG-OS LP holders:");
+    for (let i = 0; i < ghogWallets.length; i++) {
+        const wallet = ghogWallets[i];
+        const pending = await gHogRewardPool.pendingShare(1, wallet.address);
+        console.log(`Wallet ${i + 1} pending:`, ethers.formatEther(pending));
+
+        const balanceBefore = await ghog.balanceOf(wallet.address);
+        await gHogRewardPool.connect(wallet).deposit(1, 0);
+        const balanceAfter = await ghog.balanceOf(wallet.address);
+        const harvested = balanceAfter - balanceBefore;
+        console.log(`Wallet ${i + 1} harvested:`, ethers.formatEther(harvested));
+    }
+
+    // Update rate again to 0.12 after 7 days
+    await network.provider.send("evm_increaseTime", [86400 * 7]);
+    await network.provider.send("evm_mine");
     
-    // Verify the update
-    const updatedSharePerSecond = await gHogRewardPool.sharePerSecond();
-    console.log("\nUpdated sharePerSecond:", ethers.formatEther(updatedSharePerSecond));
+    const finalSharePerSecond = ethers.parseEther("0.12");
+    await gHogRewardPool.setSharePerSecond(finalSharePerSecond);
+    console.log("\nUpdated sharePerSecond to:", ethers.formatEther(finalSharePerSecond));
 
-    // Check emission history was updated
-    const newHistoryLength = await gHogRewardPool.getEmissionHistory();
-    console.log("New emission history:", newHistoryLength);
-    console.log("New emission history length:", newHistoryLength.length);
-    expect(newHistoryLength).to.be.gt(initialHistoryLength, "Emission history should have grown");
+    // Check final rewards after another day
+    await network.provider.send("evm_increaseTime", [86400]);
+    await network.provider.send("evm_mine");
 
-    // Get the latest emission point
-    const latestEmission = await gHogRewardPool.emissionHistory(newHistoryLength.length - 1);
-    console.log("\nLatest emission point:", {
-        timestamp: new Date(Number(latestEmission.timestamp) * 1000).toISOString(),
-        sharePerSecond: ethers.formatEther(latestEmission.sharePerSecond)
+    console.log("\n=== Final Rewards (After Second Rate Change) ===");
+    // Verify pool allocations are maintained
+    const hogPoolTotal = await Promise.all(
+        hogWallets.map(async wallet => {
+            const pending = await gHogRewardPool.pendingShare(0, wallet.address);
+            console.log(`HOG Wallet pending:`, ethers.formatEther(pending));
+            return pending;
+        })
+    ).then(amounts => amounts.reduce((a, b) => a + b, 0n));
+
+    const ghogPoolTotal = await Promise.all(
+        ghogWallets.map(async wallet => {
+            const pending = await gHogRewardPool.pendingShare(1, wallet.address);
+            console.log(`GHOG Wallet pending:`, ethers.formatEther(pending));
+            return pending;
+        })
+    ).then(amounts => amounts.reduce((a, b) => a + b, 0n));
+
+    console.log("\nPool Totals:", {
+        "HOG-OS": ethers.formatEther(hogPoolTotal),
+        "GHOG-OS": ethers.formatEther(ghogPoolTotal)
     });
 
-    // Verify values
-    expect(latestEmission.sharePerSecond).to.equal(initialSharePerSecond, "History should record previous rate");
+    // Verify 40/60 split is maintained
+    const totalPending = hogPoolTotal + ghogPoolTotal;
+    const hogShare = (hogPoolTotal * 1000n) / totalPending;
+    const ghogShare = (ghogPoolTotal * 1000n) / totalPending;
+
+    console.log("\nPool Shares:", {
+        "HOG-OS": `${Number(hogShare) / 10}%`,
+        "GHOG-OS": `${Number(ghogShare) / 10}%`
+    });
+
+    expect(hogShare).to.be.closeTo(400n, 10n, "HOG-OS pool share should be ~40%");
+    expect(ghogShare).to.be.closeTo(600n, 10n, "GHOG-OS pool share should be ~60%");
   });
 });

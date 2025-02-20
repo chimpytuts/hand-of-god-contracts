@@ -206,17 +206,18 @@ contract GHogRewardPool is ReentrancyGuard {
             "Cannot update emissions yet"
         );
         
-        // Only push to history if this isn't the first update
-        // (first entry was already added in constructor)
-        if (emissionHistory.length > 0) {
-            emissionHistory.push(EmissionPoint({
-                timestamp: block.timestamp,
-                sharePerSecond: sharePerSecond
-            }));
-        }
+        // Store the current rate in history before updating to new rate
+        uint256 oldSharePerSecond = sharePerSecond;
         
+        // Update to new rate
         sharePerSecond = _sharePerSecond;
         lastEmissionUpdate = block.timestamp;
+        
+        // Push the previous rate to history
+        emissionHistory.push(EmissionPoint({
+            timestamp: block.timestamp,
+            sharePerSecond: oldSharePerSecond
+        }));
         
         massUpdatePools();
     }
