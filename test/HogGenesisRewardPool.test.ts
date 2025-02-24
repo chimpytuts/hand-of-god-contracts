@@ -7,44 +7,44 @@ import { HOG, HogGenesisRewardPool } from "../typechain-types";
 
 const POOLS = [
   {
-    token: "0x287c6882dE298665977787e268f3dba052A6e251", // HOG-S
-    whale: "0x0C4290C3018172dD838631c94Ee6906C0eA65f5e", // Replace with actual whale
+    token: "0x784DD93F3c42DCbF88D45E6ad6D3CC20dA169a60", // HOG-S
+    whale: "0xe71AA3699DB23fa2c3c8D0ad329F39573619a6b7", // Replace with actual whale
     name: "HOG-S LP",
     investors: [] as string[] // Will be filled with 4 random wallets + whale
   },
   {
-    token: "0x039e2fb66102314ce7b64ce5ce3e5183bc94ad38", // OS
-    whale: "0x77BeD4760EE17Cb9704308F84CCdE8CbD7Adac2E",
+    token: "0xb1e25689D55734FD3ffFc939c4C3Eb52DFf8A794", // OS
+    whale: "0x888A555349c75353213c9610fEE87587fD6f8a6A",
     name: "OS LP",
     investors: [] as string[]
   },
   {
-    token: "0x29219dd400f2Bf60E5a23d13Be72B486D4038894", // ANON
-    whale: "0x7D42E42f61C181d682fc10E11702Fd4DEd011422",
+    token: "0x79bbF4508B1391af3A0F4B30bb5FC4aa9ab0E07C", // ANON
+    whale: "0x31a48D03578bd8a198762f03732835E768fE5a8e",
     name: "ANON",
     investors: [] as string[]
   },
   {
-    token: "0x50c42dEAcD8Fc9773493ED674b675bE577f2634b", // MCLB
-    whale: "0x05BE7ce9be8824c925A66aFf3337bf8C197d6c0D",
+    token: "0x44E23B1F3f4511b3a7e81077Fd9F2858dF1B7579", // MCLB
+    whale: "0x28aa4F9ffe21365473B64C161b566C3CdeAD0108",
     name: "MCLB",
     investors: [] as string[]
   },
   {
-    token: "0x3333b97138D4b086720b5aE8A7844b1345a33333", // SWPX
-    whale: "0xbCF3A86f0fF59a2EDAD0F72c2223Cf83f1C06133",
+    token: "0xA04BC7140c26fc9BB1F36B1A604C7A5a88fb0E70", // SWPX
+    whale: "0x15aE3A85d4dF3744126EDC8eC4C1D3aea2E6AF1C",
     name: "SWPX",
     investors: [] as string[]
   },
   {
-    token: "0x79bbF4508B1391af3A0F4B30bb5FC4aa9ab0E07C", // stS
-    whale: "0x79bbF4508B1391af3A0F4B30bb5FC4aa9ab0E07C",
+    token: "0xE5DA20F15420aD15DE0fa650600aFc998bbE3955", // stS
+    whale: "0xBB435A52EC1ED3945a636A8f0058ea3CB1e027E8",
     name: "stS",
     investors: [] as string[]
   },
   {
     token: "0xd3DCe716f3eF535C5Ff8d041c1A41C3bd89b97aE", // scUSD
-    whale: "0x5f44Fe1C8B5D0802edA2A9B638c6163aD52D633B",
+    whale: "0xfF43C5727FbFC31Cb96e605dFD7546eb8862064C",
     name: "scUSD LP",
     investors: [] as string[]
   },
@@ -53,18 +53,32 @@ const POOLS = [
     whale: "0x0348b88baDBCD5BEd1587fE48F35B2bD9c8CB85F",
     name: "INDI",
     investors: [] as string[]
+  },
+  {
+    token: "0x9fDbC3f8Abc05Fa8f3Ad3C17D2F806c1230c4564", // Beets
+    whale: "0x8858508065486ae00c53Ca1a6e67e7661EBD8c3C",
+    name: "GOGLZ",
+    investors: [] as string[]
+  },
+  {
+    token: "0x2D0E0814E62D80056181F5cd932274405966e4f0", // Beets
+    whale: "0x422949CAb2E8221F6acbfEcE80EA34F600c7c9da",
+    name: "BEETS",
+    investors: [] as string[]
   }
 ];
 
 const EXPECTED_DAILY_REWARDS: { [key: string]: bigint } = {
-    "": ethers.parseEther("21600"),         // HOG-S (27%)
-    "wS": ethers.parseEther("16800"),       // OS (21%)
-    "USDC.e": ethers.parseEther("8000"),    // ANON (10%)
-    "WETH": ethers.parseEther("8000"),      // MCLB (10%)
-    "SHADOW": ethers.parseEther("10400"),   // SWPx (13%)
-    "Anon": ethers.parseEther("5600"),      // stS (7%)
-    "scUSD": ethers.parseEther("5600"),     // scUSD (7%)
-    "INDI": ethers.parseEther("4000")       // INDI (5%)
+    "": ethers.parseEther("27540"),         // HOG-OS-LP (27%)
+    "wS": ethers.parseEther("19380"),       // OS (19%)
+    "USDC.e": ethers.parseEther("10200"),   // ANON (10%)
+    "WETH": ethers.parseEther("9180"),      // MCLB (9%)
+    "SHADOW": ethers.parseEther("11220"),   // SWPx (11%)
+    "Anon": ethers.parseEther("7140"),      // stS (7%)
+    "scUSD": ethers.parseEther("7140"),     // scUSD (7%)
+    "INDI": ethers.parseEther("4080"),      // INDI (4%)
+    "GOGLZ": ethers.parseEther("4080"),     // GOGLZ (4%)
+    "BEETS": ethers.parseEther("2040")      // BEETS (2%)
 };
 
 describe("HogGenesisRewardPool", function () {
@@ -215,7 +229,7 @@ describe("HogGenesisRewardPool", function () {
       // Transfer HOG to Genesis Pool
       await hog.transfer(
         await genesisPool.getAddress(),
-        ethers.parseEther("560000")
+        ethers.parseEther("714000")
       );
 
       // Create random wallets and distribute tokens
