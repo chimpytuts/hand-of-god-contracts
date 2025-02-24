@@ -74,13 +74,16 @@ contract HogGenesisRewardPool is ReentrancyGuard {
         devFund = _devFund;
 
         // create all the pools
-        add(0.231481481481481000 ether, 0, IERC20(0x287c6882dE298665977787e268f3dba052A6e251), false, 0); // Hog-S
-        add(0.173611111111111000 ether, 100, IERC20(0x039e2fB66102314Ce7b64Ce5Ce3E5183bc94aD38), false, 0); // S
-        add(0.115740740740741000 ether, 100, IERC20(0x29219dd400f2Bf60E5a23d13Be72B486D4038894), false, 0); // USDC.e
-        add(0.115740740740741000 ether, 100, IERC20(0x50c42dEAcD8Fc9773493ED674b675bE577f2634b), false, 0); // WETH
-        add(0.023148148148148100 ether, 100, IERC20(0x3333b97138D4b086720b5aE8A7844b1345a33333), false, 0); // SHADOW
-        add(0.023148148148148100 ether, 100, IERC20(0x79bbF4508B1391af3A0F4B30bb5FC4aa9ab0E07C), false, 0); // ANON
-        add(0.092592592592592600 ether, 100, IERC20(0xd3DCe716f3eF535C5Ff8d041c1A41C3bd89b97aE), false, 0); // scUSD
+        add(0.316956019 ether, 0, IERC20(0x287c6882dE298665977787e268f3dba052A6e251), false, 0);    // Hog-OS 27% 
+        add(0.223041088 ether, 100, IERC20(0xb1e25689D55734FD3ffFc939c4C3Eb52DFf8A794), false, 0);  // OS 19% 
+        add(0.117384259 ether, 100, IERC20(0x79bbF4508B1391af3A0F4B30bb5FC4aa9ab0E07C), false, 0);  // Anon 10% 
+        add(0.105648148 ether, 100, IERC20(0x44E23B1F3f4511b3a7e81077Fd9F2858dF1B7579), false, 0);  // Mclb 9%
+        add(0.129132870 ether, 100, IERC20(0xA04BC7140c26fc9BB1F36B1A604C7A5a88fb0E70), false, 0);  // SWPx 11%
+        add(0.082175926 ether, 100, IERC20(0xE5DA20F15420aD15DE0fa650600aFc998bbE3955), false, 0);  // stS 7% 
+        add(0.082175926 ether, 100, IERC20(0xd3DCe716f3eF535C5Ff8d041c1A41C3bd89b97aE), false, 0);  // scUSD 7% 
+        add(0.046944444 ether, 100, IERC20(0x4EEC869d847A6d13b0F6D1733C5DEC0d1E741B4f), false, 0);  // Indi 4% 
+        add(0.046944444 ether, 100, IERC20(0x9fDbC3f8Abc05Fa8f3Ad3C17D2F806c1230c4564), false, 0);  // Goglz 4%
+        add(0.023472222 ether, 100, IERC20(0x2D0E0814E62D80056181F5cd932274405966e4f0), false, 0);  // Beets 2% 
     }
 
     modifier onlyOperator() {
