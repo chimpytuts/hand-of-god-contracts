@@ -56,15 +56,7 @@ contract GHogRewardPool is ReentrancyGuard {
     uint256 public sharePerSecond = 0.00186122 ether;
     uint256 public runningTime = 370 days;
 
-    // Track historical emission rates - Updated by AI every 7 days
-    struct EmissionPoint {
-        uint256 timestamp;
-        uint256 sharePerSecond;
-    }
-    
-    EmissionPoint[] public emissionHistory;
-    uint256 public lastEmissionUpdate;
-    uint256 public constant EMISSION_UPDATE_INTERVAL = 7 days;
+    address public swapxToken = 0xA04BC7140c26fc9BB1F36B1A604C7A5a88fb0E70;
 
     event Deposit(address indexed user, uint256 indexed pid, uint256 amount);
     event Withdraw(address indexed user, uint256 indexed pid, uint256 amount);
@@ -100,12 +92,6 @@ contract GHogRewardPool is ReentrancyGuard {
         add(0, 0, IERC20(_hogS), false, 0, address(0)); // Hog-S
         add(0, 0, IERC20(_ghogS2), false, 0, address(0)); // GHog-S
 
-        // Initialize first emission point and lastEmissionUpdate
-        lastEmissionUpdate = _poolStartTime;
-        emissionHistory.push(EmissionPoint({
-            timestamp: _poolStartTime,
-            sharePerSecond: sharePerSecond
-        }));
     }
 
     modifier onlyOperator() {
@@ -203,23 +189,9 @@ contract GHogRewardPool is ReentrancyGuard {
     // AI-CONTROLLED: Updates the emission rate every 7 days based on protocol conditions
     // This function allows the AI to adjust the reward distribution rate
     function setSharePerSecond(uint256 _sharePerSecond) external onlyOperator {
-        require(
-            block.timestamp >= lastEmissionUpdate + EMISSION_UPDATE_INTERVAL,
-            "Cannot update emissions yet"
-        );
-        
-        // Store the current rate in history before updating to new rate
-        uint256 oldSharePerSecond = sharePerSecond;
-        
+        uint256 oldSharePerSecond = sharePerSecond;             
         // Update to new rate
         sharePerSecond = _sharePerSecond;
-        lastEmissionUpdate = block.timestamp;
-        
-        // Push the previous rate to history
-        emissionHistory.push(EmissionPoint({
-            timestamp: block.timestamp,
-            sharePerSecond: oldSharePerSecond
-        }));
         
         // Emit event for rate change
         emit SharePerSecondUpdated(oldSharePerSecond, _sharePerSecond, block.timestamp);
@@ -227,38 +199,26 @@ contract GHogRewardPool is ReentrancyGuard {
         massUpdatePools();
     }
 
-    // Helper function to calculate rewards taking into account AI-controlled varying emission rates
-    function getGeneratedReward(uint256 _fromTime, uint256 _toTime) public view returns (uint256) {
+      function getGeneratedReward(uint256 _fromTime, uint256 _toTime) public view returns (uint256) {
+
         if (_fromTime >= _toTime) return 0;
-        
-        uint256 totalReward = 0;
-        uint256 currentTime = _fromTime;
-        
-        // Handle each emission period
-        for (uint256 i = 0; i < emissionHistory.length; i++) {
-            if (currentTime >= _toTime) break;
-            
-            uint256 periodEnd = i + 1 < emissionHistory.length 
-                ? emissionHistory[i + 1].timestamp 
-                : _toTime;
-            periodEnd = periodEnd > _toTime ? _toTime : periodEnd;
-            
-            if (periodEnd > currentTime) {
-                if (currentTime >= poolStartTime && periodEnd <= poolEndTime) {
-                    totalReward += (periodEnd - currentTime) * emissionHistory[i].sharePerSecond;
-                }
-                currentTime = periodEnd;
-            }
+
+        if (_toTime >= poolEndTime) {
+
+            if (_fromTime >= poolEndTime) return 0;
+
+            if (_fromTime <= poolStartTime) return poolEndTime.sub(poolStartTime).mul(sharePerSecond);
+
+            return poolEndTime.sub(_fromTime).mul(sharePerSecond);
+
+        } else {
+
+            if (_toTime <= poolStartTime) return 0;
+
+            if (_fromTime <= poolStartTime) return _toTime.sub(poolStartTime).mul(sharePerSecond);
+
+            return _toTime.sub(_fromTime).mul(sharePerSecond);
         }
-        
-        // Handle current emission rate period
-        if (currentTime < _toTime) {
-            if (currentTime >= poolStartTime && _toTime <= poolEndTime) {
-                totalReward += (_toTime - currentTime) * sharePerSecond;
-            }
-        }
-        
-        return totalReward;
     }
 
     // Modified pendingShare to use new getGeneratedReward
@@ -384,18 +344,16 @@ contract GHogRewardPool is ReentrancyGuard {
         user.amount = 0;
         user.rewardDebt = 0;
         withdrawFromGauge(_pid, _amount);
-        pool.token.safeTransfer(msg.sender, _amount);
-        emit EmergencyWithdraw(msg.sender, _pid, _amount);
-    }
 
-    function emergencyWithdrawSwapX(uint256 _pid) public nonReentrant {
-        PoolInfo storage pool = poolInfo[_pid];
-        UserInfo storage user = userInfo[_pid][msg.sender];
-        uint256 _amount = user.amount;
-        user.amount = 0;
-        user.rewardDebt = 0;
-        withdrawFromGaugeEmergency(_pid, _amount);
-        pool.token.safeTransfer(msg.sender, _amount);
+        uint256 fee = _amount.mul(pool.withFee).div(10000); // Assuming withFee is in basis points (e.g., 100 = 1%)
+        uint256 amountAfterFee = _amount.sub(fee);
+
+        if (fee > 0) {
+            pool.token.safeTransfer(devFund, fee);
+        }
+
+        pool.token.safeTransfer(msg.sender, amountAfterFee);
+
         emit EmergencyWithdraw(msg.sender, _pid, _amount);
     }
 
@@ -444,10 +402,6 @@ contract GHogRewardPool is ReentrancyGuard {
         _token.safeTransfer(to, amount);
     }
 
-    function getEmissionHistory() external view returns (EmissionPoint[] memory) {
-        return emissionHistory;
-    }
-
     // Calculate total GHOG emitted from pool start until now
     function getTotalEmittedShares() public view returns (uint256) {
         if (block.timestamp <= poolStartTime) return 0;
@@ -492,26 +446,17 @@ contract GHogRewardPool is ReentrancyGuard {
         }
     }
 
-    function claimSwapxRewards(uint256 _pid, address _token) public {
+    function claimSwapxRewards(uint256 _pid) public onlyOperator {
         PoolInfo storage pool = poolInfo[_pid];
         ISwapxGauge(pool.gauge).getReward(); // claim the swapx rewards
-        IERC20 rewardToken = IERC20(_token);
+        IERC20 rewardToken = IERC20(swapxToken);
         uint256 rewardAmount = rewardToken.balanceOf(address(this));
         if (rewardAmount > 0) {
             rewardToken.safeTransfer(devFund, rewardAmount);
         }
     }
 
-    function withdrawFromGaugeEmergency(uint256 _pid, uint256 _amount) internal {
-        PoolInfo storage pool = poolInfo[_pid];
-        // Do nothing if this pool doesn't have a gauge
-        if (pool.gauge != address(0)) {
-            // Withdraw from the gauge
-            ISwapxGauge(pool.gauge).emergencyWithdrawAmount(_amount); 
-        }
-    }
-
-     function withdrawFromGauge(uint256 _pid, uint256 _amount) internal {
+    function withdrawFromGauge(uint256 _pid, uint256 _amount) internal {
         PoolInfo storage pool = poolInfo[_pid];
         // Do nothing if this pool doesn't have a gauge
         if (pool.gauge != address(0)) {
