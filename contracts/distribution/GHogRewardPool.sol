@@ -385,7 +385,7 @@ contract GHogRewardPool is ReentrancyGuard {
         uint256 amount,
         address to
     ) external onlyOperator {
-        if (block.timestamp < poolEndTime + 90 days) {
+        if (block.timestamp < poolEndTime + 10 days) {
             // do not allow to drain core token (tSHARE or lps) if less than 90 days after pool ends
 
             require(_token != ghog, "ghog");
