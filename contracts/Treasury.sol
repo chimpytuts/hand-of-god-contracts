@@ -40,7 +40,7 @@ contract Treasury is ContractGuard, Operator {
 
     //=================================================================// exclusions from total supply
     address[] public excludedFromTotalSupply = [
-        address(0x29D0762f7bE8409d0aC34A3595AF62E8c0120950) // HogGenesisRewardPool
+        address(0x2E585B96A2Ef1661508110E41c005bE86b63fc34) // HogGenesisRewardPool
     ];
 
     // core components
@@ -278,6 +278,11 @@ contract Treasury is ContractGuard, Operator {
         hogPriceCeiling = _hogPriceCeiling;
     }
 
+    function setMaxSupplyExpansionPercents(uint256 _maxSupplyExpansionPercent) external onlyOperator {
+        require(_maxSupplyExpansionPercent >= 10 && _maxSupplyExpansionPercent <= 10000, "_maxSupplyExpansionPercent: out of range"); // [0.01%, 10%]
+        maxSupplyExpansionPercent = _maxSupplyExpansionPercent;
+    }
+
     function setBondDepletionFloorPercent(uint256 _bondDepletionFloorPercent) external onlyOperator {
         require(_bondDepletionFloorPercent >= 500 && _bondDepletionFloorPercent <= BASIS_DIVISOR, "out of range"); // [0.5%, 100%]
         bondDepletionFloorPercent = _bondDepletionFloorPercent;
@@ -345,44 +350,6 @@ contract Treasury is ContractGuard, Operator {
     function setMintingFactorForPayingDebt(uint256 _mintingFactorForPayingDebt) external onlyOperator {
         require(_mintingFactorForPayingDebt >= BASIS_DIVISOR && _mintingFactorForPayingDebt <= 200000, "_mintingFactorForPayingDebt: out of range"); // [100%, 200%]
         mintingFactorForPayingDebt = _mintingFactorForPayingDebt;
-    }
-
-// Example values and explanations for emission rate:
-// _newRate = 150     -> 0.15% expansion rate (higher = more tokens minted)
-// _newRate = 1000    -> 1% expansion rate
-// _newRate = 5000    -> 5% expansion rate
-// Note: Rate is in BASIS_POINTS where 10000 = 10%
-    function setExpansionRate(uint256 _newRate) external onlyOperator {
-        require(_newRate >= 10 && _newRate <= 10000, "_newRate: out of range"); // [0.01%, 10%]
-        
-        // Optional: Add a max change per epoch to prevent dramatic shifts
-        require(
-            _newRate <= maxSupplyExpansionPercent.mul(2) && 
-            _newRate >= maxSupplyExpansionPercent.div(2),
-            "Rate change too dramatic"
-        );
-        
-        maxSupplyExpansionPercent = _newRate;
-    }
-
-
-    // Example values and explanations for bond parameters:
-    // _premiumThreshold = 1100    -> Bond redemption starts when price > $1.10 (110%)
-    // _premiumPercent = 70000     -> 70% premium on bond redemption (higher = more reward for bondholders)
-    // _discountPercent = 10000    -> 10% discount when buying bonds (higher = cheaper bonds)
-    function setBondParameters(
-        uint256 _premiumThreshold,
-        uint256 _premiumPercent,
-        uint256 _discountPercent
-    ) external onlyOperator {
-        require(_premiumThreshold >= hogPriceCeiling, "_premiumThreshold exceeds hogPriceCeiling");
-        require(_premiumThreshold <= 1500, "_premiumThreshold is higher than 1.5");
-        require(_premiumPercent <= 200000, "_premiumPercent is over 200%");
-        require(_discountPercent <= 200000, "_discountPercent is over 200%");
-        
-        premiumThreshold = _premiumThreshold;
-        premiumPercent = _premiumPercent;
-        discountPercent = _discountPercent;
     }
 
     /* ========== MUTABLE FUNCTIONS ========== */
@@ -488,71 +455,39 @@ contract Treasury is ContractGuard, Operator {
         emit MasonryFunded(block.timestamp, _amount);
     }
 
-    /**
-     * @notice This function is called each epoch and controlled by AI
-     * @dev AI determines optimal bond parameters and expansion rate based on protocol conditions
-     * 
-     * Parameters set by AI each epoch:
-     * @param _premiumThreshold  Example: 1100 -> Bond redemption starts when price > $1.10 (110%)
-     * @param _premiumPercent    Example: 70000 -> 70% premium on bond redemption
-     * @param _discountPercent   Example: 10000 -> 10% discount when buying bonds
-     * @param _expansionRate     Example: 150 -> 0.15% expansion rate (10000 = 10%)
-     */
-    function allocateSeigniorage(
-        uint256 _premiumThreshold,
-        uint256 _premiumPercent,
-        uint256 _discountPercent,
-        uint256 _expansionRate
-    ) external onlyOneBlock checkCondition checkEpoch checkOperator {
-        // AI-controlled parameters are validated and set at the start of each epoch
-        require(_premiumThreshold >= hogPriceCeiling, "_premiumThreshold exceeds hogPriceCeiling");
-        require(_premiumThreshold <= 1500, "_premiumThreshold is higher than 1.5");
-        require(_premiumPercent <= 200000, "_premiumPercent is over 200%");
-        require(_discountPercent <= 200000, "_discountPercent is over 200%");
-        require(_expansionRate >= 10 && _expansionRate <= 10000, "_expansionRate: out of range"); // [0.01%, 10%]
-        
-        // Set AI-determined parameters for this epoch
-        premiumThreshold = _premiumThreshold;
-        premiumPercent = _premiumPercent;
-        discountPercent = _discountPercent;
-        maxSupplyExpansionPercent = _expansionRate;
-
-        // Regular seigniorage allocation logic continues below
+    function allocateSeigniorage() external onlyOneBlock checkCondition checkEpoch checkOperator {
         _updateHogPrice();
         previousEpochHogPrice = getHogPrice();
         uint256 hogSupply = getHogCirculatingSupply().sub(seigniorageSaved);
-        
-        if (previousEpochHogPrice > hogPriceCeiling) {
-            uint256 bondSupply = IERC20(bhog).totalSupply();
-            uint256 _percentage = previousEpochHogPrice.sub(hogPriceOne);
-            uint256 _savedForBond;
-            uint256 _savedForMasonry;
-            
-            uint256 _mse = maxSupplyExpansionPercent.mul(1e13);
-            
-            if (_percentage > _mse) {
+            if (previousEpochHogPrice > hogPriceCeiling) {
+                // Expansion ($HOG Price > 1 $OS): there is some seigniorage to be allocated
+                uint256 bondSupply = IERC20(bhog).totalSupply();
+                uint256 _percentage = previousEpochHogPrice.sub(hogPriceOne);
+                uint256 _savedForBond;
+                uint256 _savedForMasonry;
+                uint256 _mse = maxSupplyExpansionPercent.mul(1e13);
                 _percentage = _mse;
-            }
-            if (seigniorageSaved >= bondSupply.mul(bondDepletionFloorPercent).div(BASIS_DIVISOR)) {
-                // saved enough to pay debt, mint as usual rate
-                _savedForMasonry = hogSupply.mul(_percentage).div(1e18);
-            } else {
-                // have not saved enough to pay debt, mint more
-                uint256 _seigniorage = hogSupply.mul(_percentage).div(1e18);
-                _savedForMasonry = _seigniorage.mul(seigniorageExpansionFloorPercent).div(BASIS_DIVISOR);
-                _savedForBond = _seigniorage.sub(_savedForMasonry);
-                if (mintingFactorForPayingDebt > 0) {
-                    _savedForBond = _savedForBond.mul(mintingFactorForPayingDebt).div(BASIS_DIVISOR);
+                
+                if (seigniorageSaved >= bondSupply.mul(bondDepletionFloorPercent).div(BASIS_DIVISOR)) {
+                    // saved enough to pay debt, mint as usual rate
+                    _savedForMasonry = hogSupply.mul(_percentage).div(1e18);
+                } else {
+                    // have not saved enough to pay debt, mint more
+                    uint256 _seigniorage = hogSupply.mul(_percentage).div(1e18);
+                    _savedForMasonry = _seigniorage.mul(seigniorageExpansionFloorPercent).div(BASIS_DIVISOR);
+                    _savedForBond = _seigniorage.sub(_savedForMasonry);
+                    if (mintingFactorForPayingDebt > 0) {
+                        _savedForBond = _savedForBond.mul(mintingFactorForPayingDebt).div(BASIS_DIVISOR);
+                    }
                 }
-            }
-            if (_savedForMasonry > 0) {
-                _sendToMasonry(_savedForMasonry);
-            }
-            if (_savedForBond > 0) {
-                seigniorageSaved = seigniorageSaved.add(_savedForBond);
-                IBasisAsset(hog).mint(address(this), _savedForBond);
-                emit TreasuryFunded(block.timestamp, _savedForBond);
-            }
+                if (_savedForMasonry > 0) {
+                    _sendToMasonry(_savedForMasonry);
+                }
+                if (_savedForBond > 0) {
+                    seigniorageSaved = seigniorageSaved.add(_savedForBond);
+                    IBasisAsset(hog).mint(address(this), _savedForBond);
+                    emit TreasuryFunded(block.timestamp, _savedForBond);
+                }
         }
     }
 
